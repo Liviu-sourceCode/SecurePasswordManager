@@ -1,0 +1,54 @@
+[package]
+name = "SecurePasswordManager"
+version = "1.0.0"
+description = "A Tauri App"
+authors = ["Grecu Liviu"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "passwordmanager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0-beta", features = [] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+log = "0.4"
+pretty_env_logger = "0.5"
+thiserror = "1.0.50"
+base64 = "0.22.1"
+enigo = "0.2.0"
+arboard = "3.4.0"
+fs2 = "0.4.3"
+chacha20poly1305 = "0.10.1"
+aes-gcm = "0.10.3"
+argon2 = "0.5.3"
+hkdf = "0.12.4"
+sha2 = "0.10.8"
+zeroize = { version = "1.7.0", features = ["derive"] }
+rand = "0.8.5"
+chrono = { version = "0.4.38", features = ["serde"] }
+tauri-plugin-dialog = "2.0.0-beta.5"
+tauri-plugin-opener = "2"
+tokio = { version = "1.34.0", features = ["full"] }
+uuid = { version = "1.8.0", features = ["v4", "serde"] }
+tauri-plugin-global-shortcut = "2"
+rdev = "0.5"
+secrecy = "0.8"
+totp-rs = { version = "5.7.0", features = ["qr", "otpauth", "gen_secret"] }
+regex = "1.10.2"
+byteorder = "1.5.0"
+url = "2.5"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["dpapi", "winerror", "winbase", "sysinfoapi", "iphlpapi", "winnt", "memoryapi", "processenv", "fileapi", "handleapi"] }
+windows = { version = "0.52", features = ["Win32_Foundation"] }
+
+[features]
+# default = [ "custom-protocol" ]
+# custom-protocol = [ "tauri/custom-protocol" ]
