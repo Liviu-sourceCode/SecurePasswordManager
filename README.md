@@ -33,13 +33,29 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 - **Secure session management** with auto-lock functionality
 - **Memory protection** for sensitive data
 
+#### **Two-Factor Authentication (TOTP)**
+- **RFC 6238 compliant** TOTP implementation
+- **QR code generation** for easy setup with authenticator apps
+- **6-digit time-based codes** with 30-second intervals
+- **Secret key backup** for account recovery
+- **Multi-device support** via standard TOTP protocol
+- **Integrated verification** before enabling 2FA
+
 ### 🎯 User Interface Features
+
+#### **First-Time Setup Wizard**
+- **Guided onboarding** for new users
+- **Master password creation** with real-time strength validation
+- **Security recommendations** and best practices
+- **Optional TOTP setup** during initialization
+- **Smooth transition** to main application
 
 #### **Modern Design**
 - **Dark theme** with professional styling
 - **Responsive layout** optimized for desktop use
 - **Intuitive navigation** with clear visual hierarchy
 - **Accessibility features** for better usability
+- **Toast notifications** for user feedback and confirmations
 
 #### **Password Management**
 - **Add/Edit/Delete** password entries
@@ -49,10 +65,11 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 - **Organized display** with service grouping
 
 #### **Smart Clipboard Integration**
+- **Dedicated clipboard service** with Tauri integration
 - **Intelligent copy operations** for usernames and passwords
-- **Background monitoring** for seamless workflow
-- **Auto-type functionality** for password entry
-- **Temporary clipboard clearing** for security
+- **Auto-clear functionality** after configurable timeout
+- **Secure clipboard handling** for sensitive data
+- **Cross-platform support** via Tauri clipboard plugin
 
 #### **Advanced Password Generator**
 - **Customizable length** (4-128 characters)
@@ -72,6 +89,16 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 - **Rust backend** for security and speed
 - **React frontend** with TypeScript
 - **Native OS integration**
+
+#### **Browser Extension Integration**
+- **Chrome & Firefox support** with native messaging
+- **Auto-fill detection** for login forms
+- **Context-aware credential matching** by domain
+- **Seamless desktop app communication** via native messaging protocol
+- **Password generation** directly in browser
+- **Form detection** with intelligent field mapping
+- **Security features**: rate limiting, origin validation, session management
+- **Complete installation guide** in `BROWSER_EXTENSION_GUIDE.md`
 
 #### **Data Management**
 - **Local storage** - your data never leaves your device
@@ -94,10 +121,12 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 
 ### Installation
 
+#### Desktop Application
+
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd PasswordManager
+   cd SecurePasswordManager
    ```
 
 2. **Install dependencies**
@@ -105,20 +134,36 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
    npm install
    ```
 
-3. **Install Tauri CLI**
-   ```bash
-   npm install -g @tauri-apps/cli
-   ```
-
-4. **Run in development mode**
+3. **Run in development mode**
    ```bash
    npm run tauri dev
    ```
 
-5. **Build for production**
+4. **Build for production**
    ```bash
    npm run tauri build
    ```
+
+#### Browser Extension (Optional)
+
+1. **Build the native messaging host**
+   ```bash
+   npm run build:host
+   ```
+   This builds the Rust binary and syncs it to `native-host-bin/`
+
+2. **Install the native messaging host**
+   - Follow the detailed instructions in `BROWSER_EXTENSION_GUIDE.md`
+   - Configure the manifest for Chrome or Firefox
+   - Update the executable path in the native messaging manifest
+
+3. **Load the extension**
+   - Chrome: Load unpacked from `browser-extension/` directory
+   - Firefox: Load temporary add-on
+
+4. **Testing**
+   - See `TESTING_GUIDE.md` for comprehensive test scenarios
+   - Preview components available in `browser-extension/test/`
 
 ## 🔒 Security Architecture
 
@@ -158,45 +203,95 @@ The integrated security analysis provides:
 ## 🛠️ Technology Stack
 
 ### Frontend
-- **React 18** with TypeScript
-- **Tailwind CSS** for styling
-- **Vite** for build tooling
+- **React 19** with TypeScript
+- **Tailwind CSS 4** for styling
+- **Vite 7** for build tooling
+- **React Icons** for UI icons
 - **Modern ES modules**
 
 ### Backend
-- **Rust** with Tauri framework
+- **Rust** with Tauri 2.9 framework
 - **Tokio** for async operations
 - **Serde** for serialization
 - **Ring/RustCrypto** for cryptography
+- **Tauri Plugins**: dialog, global-shortcut, opener
 
 ### Security Libraries
 - **Web Crypto API** for client-side hashing
 - **Argon2** for key derivation
 - **AES-GCM** for authenticated encryption
 - **Secure random** for salt/nonce generation
+- **TOTP (RFC 6238)** for two-factor authentication
+
+### Browser Extension
+- **Chrome Extension Manifest V3**
+- **Native Messaging Protocol** for desktop communication
+- **Content Scripts** for form detection
+- **Service Worker** for background operations
 
 ## 🔐 File Structure
 
 ```
 src/
-├── components/           # React components
-│   ├── SecurityAnalysis.tsx    # Security dashboard
-│   ├── PasswordForm.tsx        # Add/edit passwords
-│   ├── PasswordList.tsx        # Password display
-│   ├── PasswordGenerator.tsx   # Password generation
-│   ├── UnlockForm.tsx         # Master password entry
-│   └── ConfirmDialog.tsx      # Confirmation dialogs
+├── components/                    # React components
+│   ├── SecurityAnalysis.tsx       # Security dashboard & breach detection
+│   ├── PasswordForm.tsx           # Add/edit password entries
+│   ├── PasswordList.tsx           # Password display & management
+│   ├── PasswordGenerator.tsx      # Password generation tool
+│   ├── UnlockForm.tsx            # Master password entry
+│   ├── ConfirmDialog.tsx         # Confirmation dialogs
+│   ├── SetupWizard.tsx           # First-time setup wizard
+│   ├── TOTPSetup.tsx             # Two-factor authentication setup
+│   └── NotificationSystem.tsx    # Toast notifications
+├── services/
+│   └── clipboardService.ts       # Clipboard operations
 ├── utils/
-│   └── passwordAnalyzer.ts    # Password strength analysis
-├── types.ts             # TypeScript definitions
-└── App.tsx             # Main application
+│   ├── passwordAnalyzer.ts       # Password strength analysis
+│   ├── passwordStrength.ts       # Strength calculation utilities
+│   ├── breachChecker.ts          # HaveIBeenPwned integration
+│   └── tauriEnv.ts              # Tauri environment detection
+├── types.ts                      # TypeScript definitions
+└── App.tsx                       # Main application
 
 src-tauri/
 ├── src/
-│   ├── lib.rs          # Core Rust logic
-│   └── main.rs         # Application entry
-└── vault.enc           # Encrypted password vault
+│   ├── lib.rs                    # Core Rust logic & Tauri commands
+│   └── main.rs                   # Application entry point
+├── Cargo.toml                    # Rust dependencies
+├── tauri.conf.json              # Tauri configuration
+└── capabilities/                 # Permission configurations
+
+browser-extension/
+├── manifest.json                 # Extension manifest (Chrome/Firefox)
+├── background.js                 # Service worker & native messaging
+├── content.js                    # Content script for form detection
+├── injected.js                   # Page-level script injection
+├── popup.html/js                 # Extension popup UI
+├── native-messaging-host/        # Native messaging configuration
+│   └── com.passwordmanager.native.json
+├── test/                         # Preview & test pages
+│   ├── credential_picker_preview.html
+│   └── password_dialog_preview.html
+└── icons/                        # Extension icons
+
+native-host-bin/                  # Compiled native messaging host
+├── SecurePasswordManager.exe     # Windows binary
+└── (platform-specific binaries)
+
+tools/
+└── sync-host.ps1                # Script to sync native host binary
+
+.gitignore                        # Git ignore rules (security-focused)
+BROWSER_EXTENSION_GUIDE.md        # Browser extension setup guide
+TESTING_GUIDE.md                  # Testing documentation
+README.md                         # This file
 ```
+
+## 📚 Additional Documentation
+
+- **[BROWSER_EXTENSION_GUIDE.md](BROWSER_EXTENSION_GUIDE.md)** - Complete browser extension setup and configuration
+- **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Comprehensive testing scenarios and procedures
+- **[browser-extension/NATIVE_MESSAGING_DEBUG.md](browser-extension/NATIVE_MESSAGING_DEBUG.md)** - Native messaging debugging guide
 
 ## 🤝 Contributing
 
