@@ -62,3 +62,21 @@ browser-extension.pem
 passwords.json
 vault.json
 *.vault
+
+# Local build/release artifacts (generated)
+licenses/
+passwordmanager@*
+passwordmanager-*.AppImage
+CCpasswoCCrdmCanCCagCCerCCCCC@*
+
+# Local helper/output folders accidentally created in root
+bash
+cargo
+
+# Repo docs intended to stay untracked locally
+EULA.md
+THIRD_PARTY_NOTICES.md
+INSTALLATION_LINUX.md
+
+# Local sync helper script (tracked copy is not required in this repo)
+tools/sync-host.sh

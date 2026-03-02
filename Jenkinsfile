@@ -185,7 +185,7 @@ if [ -f src-tauri/target/release/SecurePasswordManager ]; then
   cp src-tauri/target/release/SecurePasswordManager build-artifacts/
 fi
 
-find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} build-artifacts/ \; 2>/dev/null || true
+find src-tauri/target/release/bundle -type f '(' -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' ')' -exec cp {} build-artifacts/ ';' 2>/dev/null || true
 
 if [ -d build-artifacts ] && [ "$(find build-artifacts -type f | wc -l)" -gt 0 ]; then
   (

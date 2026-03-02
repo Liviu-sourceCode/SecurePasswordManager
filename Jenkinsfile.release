@@ -137,7 +137,7 @@ if [ -f src-tauri/target/release/SecurePasswordManager ]; then
   cp src-tauri/target/release/SecurePasswordManager release-artifacts/
 fi
 
-find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} release-artifacts/ \; 2>/dev/null || true
+find src-tauri/target/release/bundle -type f '(' -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
 
 if [ -d licenses ]; then
   cp -r licenses release-artifacts/
