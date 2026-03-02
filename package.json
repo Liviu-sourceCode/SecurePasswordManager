@@ -22,8 +22,8 @@
     "legal:bundle": "node ./tools/generate-legal-bundle.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.9.0",
-    "@tauri-apps/plugin-dialog": "^2.4.0",
+    "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-global-shortcut": "^2.3.0",
     "@tauri-apps/plugin-opener": "^2",
     "react": "^19.1.0",
@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.12",
-    "@tauri-apps/cli": "2.9.0",
+    "@tauri-apps/cli": "^2.10.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@types/uuid": "^10.0.0",
