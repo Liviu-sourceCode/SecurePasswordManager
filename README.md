@@ -114,10 +114,27 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 
 ## 🚀 Getting Started
 
+### Platform Support
+
+✅ **Windows** - Full support with DPAPI for secure storage  
+✅ **Linux** - Full support with system keyring (GNOME Keyring, KWallet)  
+✅ **macOS** - Full support with macOS Keychain  
+
 ### Prerequisites
 - Node.js (v16 or higher)
 - Rust (latest stable)
 - npm or yarn package manager
+- **Linux only**: libdbus-1-dev (for keyring support)
+  ```bash
+  # Debian/Ubuntu
+  sudo apt-get install libdbus-1-dev pkg-config
+  
+  # Fedora/RHEL
+  sudo dnf install dbus-devel
+  
+  # Arch Linux
+  sudo pacman -S dbus
+  ```
 
 ### Installation
 
@@ -144,7 +161,45 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
    npm run tauri build
    ```
 
+#### Jenkins CI (Linux)
+
+This repository includes a Linux-first Jenkins pipeline at `Jenkinsfile`.
+
+What it runs on each update:
+
+- `npm ci`
+- `npm run build`
+- `cargo check --manifest-path src-tauri/Cargo.toml --all-targets`
+- `cargo build --release --manifest-path src-tauri/Cargo.toml`
+- `npm run tauri:build:linux` (AppImage)
+- `npm run legal:bundle`
+
+Artifacts archived by Jenkins:
+
+- `dist/`
+- `licenses/`
+- `src-tauri/target/release/SecurePasswordManager`
+- `src-tauri/target/release/bundle/**` (AppImage/deb/rpm if present)
+
+Recommended Jenkins setup:
+
+1. Create a **Multibranch Pipeline** job and point it to this repository.
+2. Enable webhook from your Git provider for push/PR events.
+3. Keep SCM polling as fallback (already defined in `Jenkinsfile`).
+4. Use a Linux build agent with required system packages installed:
+
+   ```bash
+   # Debian/Ubuntu example for Tauri Linux builds
+   sudo apt-get update
+   sudo apt-get install -y \
+     build-essential curl wget file pkg-config libssl-dev \
+     libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+     librsvg2-dev patchelf libdbus-1-dev
+   ```
+
 #### Browser Extension (Optional)
+
+##### Windows
 
 1. **Build the native messaging host**
    ```bash
@@ -154,18 +209,80 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 
 2. **Install the native messaging host**
    - Follow the detailed instructions in `BROWSER_EXTENSION_GUIDE.md`
-   - Configure the manifest for Chrome or Firefox
-   - Update the executable path in the native messaging manifest
+   - The PowerShell script auto-installs to Chrome's native messaging directory
+   - Update the executable path in the native messaging manifest if needed
 
-3. **Load the extension**
-   - Chrome: Load unpacked from `browser-extension/` directory
-   - Firefox: Load temporary add-on
+##### Linux
 
-4. **Testing**
+1. **Build the native messaging host**
+   ```bash
+   npm run build:host:linux
+   # Or for specific browser:
+   npm run build:host:linux:brave
+   npm run sync-host:linux:chrome
+   npm run sync-host:linux:firefox
+   ```
+   This builds the Rust binary and installs manifests for Chrome/Brave/Firefox
+
+2. **Brave Flatpak note (important)**
+   - If you use Flatpak Brave (`com.brave.Browser`), the sync script configures a wrapper and required Flatpak permission automatically.
+   - Re-run `npm run sync-host:linux:brave` after extension ID changes.
+
+3. **Manual installation** (if needed)
+   ```bash
+   # Chrome
+   mkdir -p ~/.config/google-chrome/NativeMessagingHosts
+   cp browser-extension/native-messaging-host/com.passwordmanager.native.linux.json \
+      ~/.config/google-chrome/NativeMessagingHosts/com.passwordmanager.native.json
+   
+   # Firefox
+   mkdir -p ~/.mozilla/native-messaging-hosts
+   cp browser-extension/native-messaging-host/com.passwordmanager.native.linux.json \
+      ~/.mozilla/native-messaging-hosts/com.passwordmanager.native.json
+   ```
+
+4. **Update the manifest paths**
+   - Edit the copied manifest file
+   - Replace `/home/YOUR_USERNAME/SecurePasswordManager` with your actual path
+   - Replace `YOUR_EXTENSION_ID` with your actual extension ID
+
+##### Load the Extension
+
+**Chrome/Chromium:**
+- Go to `chrome://extensions/`
+- Enable "Developer mode"
+- Click "Load unpacked"
+- Select the `browser-extension/` directory
+
+**Firefox:**
+- Go to `about:debugging#/runtime/this-firefox`
+- Click "Load Temporary Add-on"
+- Select `browser-extension/manifest.json`
+
+##### Testing
+
+**Testing**
    - See `TESTING_GUIDE.md` for comprehensive test scenarios
    - Preview components available in `browser-extension/test/`
 
 ## 🔒 Security Architecture
+
+### Platform-Specific Secure Storage
+
+**Windows:**
+- Uses **DPAPI (Data Protection API)** for encrypting sensitive data
+- TOTP secrets and device unlock keys protected by user's Windows credentials
+- Automatic encryption/decryption without user intervention
+
+**Linux:**
+- Uses **system keyring** (GNOME Keyring, KWallet, or compatible)
+- Integrates with desktop environment's secret storage
+- Requires keyring daemon to be running
+
+**macOS:**
+- Uses **macOS Keychain** for secure storage
+- Native integration with system security
+- Touch ID compatible (if supported by keyring crate)
 
 ### Encryption Process
 1. **Master password** is processed through Argon2id key derivation
@@ -222,6 +339,9 @@ The integrated security analysis provides:
 - **AES-GCM** for authenticated encryption
 - **Secure random** for salt/nonce generation
 - **TOTP (RFC 6238)** for two-factor authentication
+- **Platform-specific secure storage**:
+  - Windows: DPAPI (winapi crate)
+  - Linux/macOS: System keyring (keyring crate)
 
 ### Browser Extension
 - **Chrome Extension Manifest V3**
@@ -279,7 +399,8 @@ native-host-bin/                  # Compiled native messaging host
 └── (platform-specific binaries)
 
 tools/
-└── sync-host.ps1                # Script to sync native host binary
+├── sync-host.ps1                # Windows: PowerShell build script
+└── sync-host.sh                 # Linux/macOS: Bash build script
 
 .gitignore                        # Git ignore rules (security-focused)
 BROWSER_EXTENSION_GUIDE.md        # Browser extension setup guide
@@ -287,11 +408,44 @@ TESTING_GUIDE.md                  # Testing documentation
 README.md                         # This file
 ```
 
+## 🌐 Cross-Platform Notes
+
+### Secure Storage Differences
+
+**Windows (DPAPI)**
+- Transparent encryption tied to user account
+- Data persists across application restarts
+- Backup: Export device.key file before Windows reinstall
+
+**Linux (Keyring)**
+- Requires keyring daemon (usually running on desktop environments)
+- May prompt for keyring password on first access
+- Headless systems: May need alternative configuration
+
+**macOS (Keychain)**
+- Native integration with system security
+- May require keychain access permissions
+- Touch ID support possible
+
+### Browser Extension Compatibility
+
+| Feature | Windows | Linux | macOS |
+|---------|---------|-------|-------|
+| Chrome Extension | ✅ | ✅ | ✅ |
+| Firefox Extension | ✅ | ✅ | ✅ |
+| Native Messaging | ✅ | ✅ | ✅ |
+| Auto-fill | ✅ | ✅ | ✅ |
+| Form Detection | ✅ | ✅ | ✅ |
+
 ## 📚 Additional Documentation
 
 - **[BROWSER_EXTENSION_GUIDE.md](BROWSER_EXTENSION_GUIDE.md)** - Complete browser extension setup and configuration
 - **[TESTING_GUIDE.md](TESTING_GUIDE.md)** - Comprehensive testing scenarios and procedures
 - **[browser-extension/NATIVE_MESSAGING_DEBUG.md](browser-extension/NATIVE_MESSAGING_DEBUG.md)** - Native messaging debugging guide
+- **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** - Open-source dependency notices and attribution summary
+- **[EULA.md](EULA.md)** - End-user license agreement template for commercial distribution
+- **`Jenkinsfile`** - Linux CI pipeline for automatic build and artifact generation
+- **`npm run legal:bundle`** - Generates a `licenses/` folder with third-party license texts and snapshot metadata
 
 ## 🤝 Contributing
 
@@ -303,7 +457,12 @@ This password manager demonstrates enterprise-level security practices and is su
 
 ## 📄 License
 
-This project is for educational and professional development purposes.
+This repository currently includes:
+
+- `EULA.md` for proprietary/commercial distribution terms (template; customize before release)
+- `THIRD_PARTY_NOTICES.md` for open-source attribution and license obligations
+
+If you distribute builds commercially, ensure your finalized EULA and third-party notices are included with each release.
 
 ## ⚠️ Security Notice
 

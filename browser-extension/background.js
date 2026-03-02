@@ -62,6 +62,7 @@ console.log('Extension ID:', chrome.runtime.id);
 class NativeMessagingService {
   constructor() {
     this.port = null;
+    this.isConnecting = false;
     this.sessionToken = null;
     this.encryptionKey = null; // base64 session key from host
     this.isConnected = false;
@@ -74,11 +75,23 @@ class NativeMessagingService {
 
   // Connect to native messaging host
   connect() {
-    if (this.port) {
-      this.port.disconnect();
+    if (this.isConnected && this.port) {
+      return;
     }
 
+    if (this.isConnecting) {
+      return;
+    }
+
+    this.isConnecting = true;
+
     try {
+      // If there is a stale disconnected port object, clear it first.
+      if (this.port && !this.isConnected) {
+        try { this.port.disconnect(); } catch (_) {}
+        this.port = null;
+      }
+
       console.log('Attempting to connect to native messaging host:', NATIVE_APP_NAME);
       this.port = chrome.runtime.connectNative(NATIVE_APP_NAME);
       this.setupPortListeners();
@@ -89,6 +102,8 @@ class NativeMessagingService {
       console.error('Failed to connect to native messaging host:', error);
       console.error('Make sure the Tauri application is running and the native messaging host is properly configured');
       this.isConnected = false;
+    } finally {
+      this.isConnecting = false;
     }
   }
 
@@ -102,20 +117,10 @@ class NativeMessagingService {
       console.log('Disconnected from native messaging host');
       this.isConnected = false;
       this.sessionToken = null;
+      this.port = null;
       
       if (chrome.runtime.lastError) {
         console.error('Native messaging error:', chrome.runtime.lastError.message);
-        
-        // Only attempt to reconnect if we haven't exceeded retry limit
-        this.reconnectAttempts = (this.reconnectAttempts || 0) + 1;
-        if (this.reconnectAttempts < 5) {
-          setTimeout(() => {
-            console.log(`Attempting to reconnect to native messaging host... (attempt ${this.reconnectAttempts}/5)`);
-            this.connect();
-          }, 3000 * this.reconnectAttempts); // Exponential backoff
-        } else {
-          console.error('Max reconnection attempts reached. Please check if the Tauri application is running properly.');
-        }
       }
     });
   }
@@ -673,7 +678,6 @@ chrome.runtime.onInstalled.addListener(() => {
 
 chrome.runtime.onStartup.addListener(() => {
   console.log('Password Manager extension started');
-  nativeMessaging.connect();
 });
 
 // Handle messages from content scripts and popup
@@ -814,9 +818,6 @@ async function proactiveCredentialSearch(tabId, domain, url) {
     console.error('Proactive credential search failed for domain', domain, ':', error);
   }
 }
-
-// Initialize connection on startup
-nativeMessaging.connect();
 
 (function ensureMessageSupport(){
   // Add a minimal handler to forward proactive multiple credentials to content

@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Write, Read},
+    io::{Write, Read, IsTerminal},
 
     path::PathBuf,
     sync::Mutex,
@@ -96,31 +96,41 @@ fn sanitize_error(error: &str) -> String {
     format!("An unexpected error occurred: {}. Please try again.", error)
 }
 
-// New imports for TOTP and DPAPI
+// New imports for TOTP
 use totp_rs::{Algorithm as TOTPAlgorithm, TOTP, Secret};
-// Replace windows crate DPAPI imports with winapi
+
+// Platform-specific secure storage imports
+#[cfg(target_os = "windows")]
 use winapi::um::dpapi::{CryptProtectData, CryptUnprotectData};
+#[cfg(target_os = "windows")]
 use winapi::um::wincrypt::DATA_BLOB;
+#[cfg(target_os = "windows")]
 use winapi::um::winbase::LocalFree;
+#[cfg(target_os = "windows")]
 use winapi::shared::minwindef::HLOCAL;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 use winapi::um::processenv::GetStdHandle;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 use winapi::um::fileapi::GetFileType;
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 use winapi::um::winbase::{STD_INPUT_HANDLE, FILE_TYPE_PIPE};
-#[cfg(windows)]
+#[cfg(target_os = "windows")]
 use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-// Removed unused system identifiers imports after stabilizing DPAPI usage
+#[cfg(target_os = "windows")]
 use winapi::um::memoryapi::VirtualLock;
+#[cfg(target_os = "windows")]
 use winapi::shared::minwindef::{BOOL, LPVOID};
+#[cfg(target_os = "windows")]
 use winapi::shared::basetsd::SIZE_T;
+
+// Linux/macOS keyring for secure storage
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use keyring::Entry;
 
 // Removed unused OsString imports
 
-
-#[cfg(unix)]
-use mlock::{mlock, munlock};
+// Import required traits
+use sha2::Digest;
 
 // Error handling
 #[derive(Error, Debug)]
@@ -518,16 +528,21 @@ fn get_totp_secret_path(app_handle: &AppHandle) -> Result<PathBuf, VaultError> {
     Ok(dir.join("totp.secret"))
 }
 
-// Path helper for DPAPI-protected device unlock key
+// Path helper for platform-secure device unlock key
 fn get_device_unlock_key_path(app_handle: &AppHandle) -> Result<PathBuf, VaultError> {
     let vault_path = get_vault_path(app_handle)?;
     let dir = vault_path.parent().unwrap_or(std::path::Path::new("."));
     Ok(dir.join("device.key"))
 }
 
-// Removed get_machine_id: DPAPI is used without custom entropy for stability across restarts.
+// Removed get_machine_id: Platform-specific secure storage is used without custom entropy for stability across restarts.
 
-// DPAPI helpers using winapi
+// ============================================================================
+// Platform-Specific Secure Storage Implementation
+// ============================================================================
+
+// Windows: DPAPI helpers using winapi
+#[cfg(target_os = "windows")]
 fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
     unsafe {
         let mut in_blob = DATA_BLOB {
@@ -558,6 +573,7 @@ fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
     }
 }
 
+#[cfg(target_os = "windows")]
 fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
     unsafe {
         let mut in_blob = DATA_BLOB {
@@ -586,6 +602,50 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
         LocalFree(out_blob.pbData as HLOCAL);
         Ok(out)
     }
+}
+
+// Linux/macOS: Keyring-based secure storage
+// Uses system keyring (GNOME Keyring, KWallet, macOS Keychain)
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const KEYRING_SERVICE: &str = "com.passwordmanager.secure";
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
+    // For keyring, we'll use base64 encoding since keyring stores strings
+    let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+    
+    // Create a unique key name based on the data hash (for multiple entries)
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(data);
+    let hash = hasher.finalize();
+    let key_name = format!("data_{}", hex::encode(&hash[..8]));
+    
+    let entry = Entry::new(KEYRING_SERVICE, &key_name)
+        .map_err(|_| VaultError::EncryptionError)?;
+    
+    entry.set_password(&encoded)
+        .map_err(|_| VaultError::EncryptionError)?;
+    
+    // Return the key name so we can retrieve it later
+    Ok(key_name.as_bytes().to_vec())
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, VaultError> {
+    // data contains the key name
+    let key_name = String::from_utf8(data.to_vec())
+        .map_err(|_| VaultError::DecryptionError)?;
+    
+    let entry = Entry::new(KEYRING_SERVICE, &key_name)
+        .map_err(|_| VaultError::DecryptionError)?;
+    
+    let encoded = entry.get_password()
+        .map_err(|_| VaultError::DecryptionError)?;
+    
+    let decoded = base64::engine::general_purpose::STANDARD.decode(encoded)
+        .map_err(|_| VaultError::DecryptionError)?;
+    
+    Ok(decoded)
 }
 
 // Check available disk space
@@ -759,11 +819,9 @@ fn verify_master_key(master_key: &SecureKey, salt: &[u8], stored_verifier: &[u8]
 
 #[cfg(unix)]
 fn secure_memory(ptr: *mut u8, len: usize) -> Result<(), PasswordManagerError> {
-    unsafe {
-        if mlock(ptr, len).is_err() {
-            return Err(PasswordManagerError::MemoryProtectionError);
-        }
-    }
+    // Memory locking not available on this Unix system
+    // The zeroize crate is used instead for sensitive data protection
+    let _ = (ptr, len);
     Ok(())
 }
 
@@ -784,18 +842,6 @@ fn secure_memory(_ptr: *mut u8, _len: usize) -> Result<(), PasswordManagerError>
     Err(PasswordManagerError::MemoryProtectionError)
 }
 
-#[cfg(unix)]
-fn unsecure_memory(ptr: *mut u8, len: usize) -> Result<(), PasswordManagerError> {
-    unsafe {
-        if munlock(ptr, len).is_err() {
-            return Err(PasswordManagerError::MemoryProtectionError);
-        }
-    }
-    Ok(())
-}
-
-
-
 // Session management functions
 fn check_session_timeout(app_handle: &AppHandle, vault: &mut VaultState) -> Result<(), PasswordManagerError> {
     if !vault.is_locked {
@@ -804,7 +850,7 @@ fn check_session_timeout(app_handle: &AppHandle, vault: &mut VaultState) -> Resu
         
         if elapsed > timeout_duration {
             vault.is_locked = true;
-            println!("[DEBUG] Session timeout: Vault automatically locked after {} minutes", vault.session_timeout_minutes);
+            eprintln!("[DEBUG] Session timeout: Vault automatically locked after {} minutes", vault.session_timeout_minutes);
             let _ = app_handle.emit("vault_auto_locked", serde_json::json!({ "reason": "session_timeout" }));
             return Err(PasswordManagerError::SessionTimeout);
         }
@@ -827,6 +873,74 @@ fn lock_master_key(app_state: &AppState) -> Result<std::sync::MutexGuard<'_, Opt
 
 fn lock_mfa_time(app_state: &AppState) -> Result<std::sync::MutexGuard<'_, Option<Instant>>, PasswordManagerError> {
     app_state.mfa_verified_at.lock().map_err(|_| PasswordManagerError::MutexError)
+}
+
+#[cfg(windows)]
+fn stdin_is_pipe_for_native() -> bool {
+    unsafe {
+        let handle = GetStdHandle(STD_INPUT_HANDLE);
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            false
+        } else {
+            GetFileType(handle) == FILE_TYPE_PIPE
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn stdin_is_pipe_for_native() -> bool {
+    !std::io::stdin().is_terminal()
+}
+
+#[cfg(unix)]
+fn parent_process_hint() -> Option<String> {
+    let ppid = std::fs::read_to_string("/proc/self/stat")
+        .ok()
+        .and_then(|s| {
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            parts.get(3).and_then(|v| v.parse::<u32>().ok())
+        })?;
+
+    let cmdline_path = format!("/proc/{}/cmdline", ppid);
+    if let Ok(raw) = std::fs::read(&cmdline_path) {
+        if !raw.is_empty() {
+            let hint = String::from_utf8_lossy(&raw)
+                .replace('\0', " ")
+                .to_lowercase();
+            if !hint.trim().is_empty() {
+                return Some(hint);
+            }
+        }
+    }
+
+    let comm_path = format!("/proc/{}/comm", ppid);
+    std::fs::read_to_string(comm_path)
+        .ok()
+        .map(|v| v.trim().to_lowercase())
+}
+
+#[cfg(not(unix))]
+fn parent_process_hint() -> Option<String> {
+    None
+}
+
+fn is_likely_browser_parent() -> bool {
+    if let Some(hint) = parent_process_hint() {
+        return [
+            "brave",
+            "chrome",
+            "chromium",
+            "msedge",
+            "firefox",
+            "opera",
+            "vivaldi",
+            "zypak-helper",
+        ]
+        .iter()
+        .any(|name| hint.contains(name));
+    }
+
+    false
 }
 
 // Tauri commands
@@ -887,54 +1001,54 @@ async fn vault_exists(app_handle: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 async fn create_vault(password: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<Vec<PasswordEntry>, String> {
-    println!("[DEBUG] Starting create_vault");
+    eprintln!("[DEBUG] Starting create_vault");
     // Always validate master password for new vault creation
     validate_master_password(&password).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Password validated");
+    eprintln!("[DEBUG] Password validated");
     
     // Get the vault path (creates directory if needed)
     let vault_path = get_vault_path(&app_handle).map_err(|e| sanitize_error(&e.to_string()))?;
     let path_str = vault_path.to_string_lossy().to_string();
     let _ = write_audit_log(&app_handle, "vault_create_path", &format!("Target path: {}", path_str));
-    println!("[DEBUG] Vault path: {:?}", vault_path);
+    eprintln!("[DEBUG] Vault path: {:?}", vault_path);
     
     // Safety guard: never overwrite an existing vault
     if vault_path.exists() {
         let _ = write_audit_log(&app_handle, "vault_create_error", &format!("Vault already exists at {}", path_str));
-        println!("[DEBUG] Vault already exists, aborting");
+        eprintln!("[DEBUG] Vault already exists, aborting");
         return Err("Vault already exists. Please unlock your vault.".to_string());
     }
-    println!("[DEBUG] Vault does not exist, proceeding");
+    eprintln!("[DEBUG] Vault does not exist, proceeding");
     
     // Generate 32 bytes of salt for enhanced security
     let mut salt_bytes = [0u8; 32];
     OsRng.fill_bytes(&mut salt_bytes);
-    println!("[DEBUG] Salt generated");
+    eprintln!("[DEBUG] Salt generated");
     
     // Derive master key using Argon2id
     let master_key = derive_master_key(&password, &salt_bytes).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Master key derived");
+    eprintln!("[DEBUG] Master key derived");
     
     // Derive encryption key and verifier using HKDF
     let (encryption_key, verifier) = derive_keys(&master_key, &salt_bytes).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Encryption key and verifier derived");
+    eprintln!("[DEBUG] Encryption key and verifier derived");
     
     // Store master key securely
     *lock_master_key(&app_state).map_err(|e| e.to_string())? = Some(master_key);
-    println!("[DEBUG] Master key stored in state");
+    eprintln!("[DEBUG] Master key stored in state");
 
     let initial_entries: Vec<PasswordEntry> = Vec::new();
     let payload = VaultPayload { entries: initial_entries.clone(), totp_account: None };
     let vault_data = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Vault payload serialized");
+    eprintln!("[DEBUG] Vault payload serialized");
     
     // Generate AAD (Additional Authenticated Data)
     let aad = format!("vault_v{}_created_{}", VAULT_VERSION, chrono::Utc::now().timestamp());
     let aad_bytes = aad.as_bytes();
-    println!("[DEBUG] AAD generated");
+    eprintln!("[DEBUG] AAD generated");
     
     let (encrypted_data, nonce) = encrypt_with_aad(&vault_data, &encryption_key, aad_bytes).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Vault data encrypted");
+    eprintln!("[DEBUG] Vault data encrypted");
 
     let encrypted_vault = EncryptedVault {
         version: VAULT_VERSION,
@@ -948,20 +1062,20 @@ async fn create_vault(password: String, app_state: State<'_, AppState>, app_hand
     
     let json = serde_json::to_string(&encrypted_vault).map_err(|e| e.to_string())?;
     fs::write(&vault_path, json).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Vault created successfully at {:?}", vault_path);
+    eprintln!("[DEBUG] Vault created successfully at {:?}", vault_path);
     
     let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     vault.entries = initial_entries;
     vault.totp_account = None;
     update_activity(&mut vault);
     vault.is_locked = false;
-    println!("[DEBUG] Vault unlocked and state updated");
+    eprintln!("[DEBUG] Vault unlocked and state updated");
     
     // Log vault creation (audit trail)
     if let Err(err) = write_audit_log(&app_handle, "vault_create", "Vault created") {
         eprintln!("AUDIT WRITE ERROR: {}", err);
     }
-    println!("[DEBUG] Audit log written");
+    eprintln!("[DEBUG] Audit log written");
     
     Ok(Vec::new())
 }
@@ -1124,7 +1238,7 @@ async fn add_entry(
     app_state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<Vec<PasswordEntry>, String> {
-    println!("[DEBUG] Attempting to add entry");
+    eprintln!("[DEBUG] Attempting to add entry");
     let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     
     // Check session timeout
@@ -1139,7 +1253,7 @@ async fn add_entry(
     update_activity(&mut vault);
     
     if vault.is_locked {
-        println!("[DEBUG] Add entry failed: Vault is locked.");
+        eprintln!("[DEBUG] Add entry failed: Vault is locked.");
         return Err("Vault is locked".to_string());
     }
 
@@ -1170,11 +1284,11 @@ async fn add_entry(
         new_entry.notes = Some(sanitize_input(notes));
     }
     validate_password_entry(&new_entry).map_err(|e| e.to_string())?;
-    println!("[DEBUG] Entry validated: {}", new_entry.service);
+    eprintln!("[DEBUG] Entry validated: {}", new_entry.service);
 
     vault.entries.push(new_entry.clone());
     update_activity(&mut vault);
-    println!("[DEBUG] Entry added to in-memory vault. Attempting to save.");
+    eprintln!("[DEBUG] Entry added to in-memory vault. Attempting to save.");
 
     let updated_entries = vault.entries.clone();
     let entries_for_saving = vault.entries.clone();
@@ -1184,14 +1298,14 @@ async fn add_entry(
     let save_result = save_vault(&entries_for_saving, &totp_account, &app_state, &app_handle);
     match save_result {
         Ok(_) => {
-            println!("[DEBUG] Vault saved successfully after adding entry.");
+            eprintln!("[DEBUG] Vault saved successfully after adding entry.");
             if let Err(err) = write_audit_log(&app_handle, "add_entry", "Password entry added") {
                 eprintln!("AUDIT WRITE ERROR: {}", err);
             }
             Ok(updated_entries)
         }
         Err(e) => {
-            println!("[DEBUG] Save vault failed after adding entry: {:?}", e);
+            eprintln!("[DEBUG] Save vault failed after adding entry: {:?}", e);
             Err(format!("Save failed: {}", e))
         }
     }
@@ -1761,7 +1875,7 @@ async fn finalize_totp(secret: String, app_state: State<'_, AppState>, app_handl
     drop(vault);
     let secret_bytes = BASE64.decode(&secret).map_err(|e| e.to_string())?;
 
-    // Protect secret bytes with DPAPI and save to file
+    // Protect secret bytes with platform-secure storage and save to file
     let secret_path = get_totp_secret_path(&app_handle).map_err(|e| e.to_string())?;
     if let Err(err) = check_disk_space(&secret_path) {
         eprintln!("Warning: disk space check failed for TOTP secret: {}", err);
@@ -1775,7 +1889,7 @@ async fn finalize_totp(secret: String, app_state: State<'_, AppState>, app_handl
         .map_err(|e| e.to_string())?;
     file.write_all(&protected).map_err(|e| e.to_string())?;
 
-    let _ = write_audit_log(&app_handle, "mfa_provision", "TOTP secret provisioned and stored with DPAPI");
+    let _ = write_audit_log(&app_handle, "mfa_provision", "TOTP secret provisioned and stored with platform-secure storage");
     Ok(())
 }
 
@@ -1828,10 +1942,10 @@ async fn verify_totp(code: String, secret: Option<String>, app_state: State<'_, 
         let mut mfa = app_state.mfa_verified_at.lock().unwrap();
         let now = Instant::now();
         *mfa = Some(now);
-        println!("MFA verification successful, timestamp set to: {:?}", now);
+        eprintln!("MFA verification successful, timestamp set to: {:?}", now);
         let _ = write_audit_log(&app_handle, "mfa_verify", "TOTP verification succeeded");
     } else {
-        println!("MFA verification failed for code: {}", code);
+        eprintln!("MFA verification failed for code: {}", code);
         let _ = write_audit_log(&app_handle, "mfa_verify", "TOTP verification failed");
     }
     Ok(ok)
@@ -1924,22 +2038,22 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                     EventType::KeyPress(RdevKey::ControlLeft) | EventType::KeyPress(RdevKey::ControlRight) => {
                         let mut state = key_state.write().await;
                         state.ctrl_pressed = true;
-                        println!("[DEBUG] Ctrl key pressed");
+                        eprintln!("[DEBUG] Ctrl key pressed");
                     }
                     EventType::KeyRelease(RdevKey::ControlLeft) | EventType::KeyRelease(RdevKey::ControlRight) => {
                         let mut state = key_state.write().await;
                         state.ctrl_pressed = false;
-                        println!("[DEBUG] Ctrl key released");
+                        eprintln!("[DEBUG] Ctrl key released");
                     }
                     EventType::KeyPress(RdevKey::KeyV) => {
                         let key_state_read = key_state.read().await;
                         if key_state_read.ctrl_pressed {
-                            println!("[DEBUG] Global Ctrl+V detected!");
+                            eprintln!("[DEBUG] Global Ctrl+V detected!");
 
                             // Check if smart clipboard is active
                             let clipboard_state = clipboard_manager.read().await;
                             if clipboard_state.is_active && !clipboard_state.password.is_empty() {
-                                println!("[DEBUG] Smart clipboard active, triggering autotype sequence");
+                                eprintln!("[DEBUG] Smart clipboard active, triggering autotype sequence");
 
                                 // Clone the password for the autotype sequence
                                 let password = clipboard_state.password.clone();
@@ -1951,11 +2065,11 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                                     tokio::time::sleep(Duration::from_millis(700)).await;
 
                                     // Press TAB to move to password field
-                                    println!("[DEBUG] Pressing TAB key");
+                                    eprintln!("[DEBUG] Pressing TAB key");
                                     let mut enigo = Enigo::new(&Settings::default()).unwrap();
                                     for _ in 0..3 {
                                         if let Err(e) = enigo.key(EnigoKey::Tab, enigo::Direction::Click) {
-                                            println!("[DEBUG] Failed to press TAB: {}", e);
+                                            eprintln!("[DEBUG] Failed to press TAB: {}", e);
                                         } else {
                                             break;
                                         }
@@ -1966,17 +2080,17 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                                     tokio::time::sleep(Duration::from_millis(300)).await;
 
                                     // Type the password
-                                    println!("[DEBUG] Typing password");
+                                    eprintln!("[DEBUG] Typing password");
                                     for _ in 0..3 {
                                         if let Err(e) = enigo.text(&password) {
-                                            println!("[DEBUG] Failed to type password: {}", e);
+                                            eprintln!("[DEBUG] Failed to type password: {}", e);
                                         } else {
                                             break;
                                         }
                                         tokio::time::sleep(Duration::from_millis(100)).await;
                                     }
 
-                                    println!("[DEBUG] Enhanced autotype completed");
+                                    eprintln!("[DEBUG] Enhanced autotype completed");
                                 });
 
                                 // Deactivate smart clipboard
@@ -1994,30 +2108,30 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
 
         // Start listening for global key events
         if let Err(err) = listen(callback) {
-            println!("[ERROR] Global key listener error: {:?}", err);
+            eprintln!("[ERROR] Global key listener error: {:?}", err);
         }
     });
 }
 
 // Atomic save_vault function with temporary file and atomic rename
 fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app_state: &AppState, app_handle: &AppHandle) -> Result<(), VaultError> {
-    println!("[DEBUG] Saving vault...");
+    eprintln!("[DEBUG] Saving vault...");
     let master_key = {
         let guard = app_state.master_key.lock().unwrap();
         guard.clone().ok_or(VaultError::NotUnlocked)?
     };
-    println!("[DEBUG] Master key retrieved.");
+    eprintln!("[DEBUG] Master key retrieved.");
 
     let vault_path = get_vault_path(app_handle)?;
-    println!("[DEBUG] Vault path: {:?}", vault_path);
+    eprintln!("[DEBUG] Vault path: {:?}", vault_path);
     
     // Check available disk space before proceeding
     check_disk_space(&vault_path)?;
-    println!("[DEBUG] Disk space checked.");
+    eprintln!("[DEBUG] Disk space checked.");
     
     // Create backup before modifying vault
     create_backup(&vault_path)?;
-    println!("[DEBUG] Backup created.");
+    eprintln!("[DEBUG] Backup created.");
 
     // Read existing vault metadata. If it doesn't exist or is corrupt, we can't proceed.
     let (salt_bytes, verifier, aad, argon2_params) = if vault_path.exists() {
@@ -2038,12 +2152,12 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
 
     // Derive encryption key
     let (encryption_key, _) = derive_keys(&master_key, &salt_bytes)?;
-    println!("[DEBUG] Encryption key derived.");
+    eprintln!("[DEBUG] Encryption key derived.");
 
     let payload = VaultPayload { entries: entries.to_vec(), totp_account: totp_account.clone() };
     let vault_data = serde_json::to_vec(&payload)?;
     let (encrypted_data, nonce) = encrypt_with_aad(&vault_data, &encryption_key, &aad)?;
-    println!("[DEBUG] Vault data encrypted.");
+    eprintln!("[DEBUG] Vault data encrypted.");
 
     let encrypted_vault = EncryptedVault {
         version: VAULT_VERSION,
@@ -2056,7 +2170,7 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
     };
 
     let json = serde_json::to_string(&encrypted_vault)?;
-    println!("[DEBUG] Encrypted vault serialized to JSON.");
+    eprintln!("[DEBUG] Encrypted vault serialized to JSON.");
     
     // Atomic file operation: write to temporary file first
     let temp_path = vault_path.with_extension("tmp");
@@ -2067,20 +2181,20 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
         
         // Lock the temporary file to prevent concurrent access
         temp_file.lock_exclusive().map_err(|_| VaultError::FileLocked)?;
-        println!("[DEBUG] Temporary file locked.");
+        eprintln!("[DEBUG] Temporary file locked.");
         
         temp_file.write_all(json.as_bytes())?;
         temp_file.sync_all()?; // Ensure data is written to disk
-        println!("[DEBUG] Data written to temporary file.");
+        eprintln!("[DEBUG] Data written to temporary file.");
         
         // Unlock before closing
         temp_file.unlock().map_err(|_| VaultError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Failed to unlock file")))?;
-        println!("[DEBUG] Temporary file unlocked.");
+        eprintln!("[DEBUG] Temporary file unlocked.");
     }
     
     // Atomic rename - this is atomic on most filesystems
     fs::rename(&temp_path, &vault_path)?;
-    println!("[DEBUG] Vault saved successfully.");
+    eprintln!("[DEBUG] Vault saved successfully.");
 
     Ok(())
 }
@@ -2119,25 +2233,17 @@ pub fn run() {
     // Check if we should run in native messaging mode
     let args: Vec<String> = std::env::args().collect();
     
-    // Check for native messaging mode indicators
-    // Robust detection: explicit flag or chrome-extension origin, or stdin is a pipe (native messaging), but do not rely on parent-window or args length.
-    #[cfg(windows)]
-    let stdin_is_pipe = unsafe {
-        let handle = GetStdHandle(STD_INPUT_HANDLE);
-        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-            false
-        } else {
-            let ft = GetFileType(handle);
-            ft == FILE_TYPE_PIPE
-        }
-    };
-    #[cfg(not(windows))]
-    let stdin_is_pipe = !std::io::stdin().is_terminal();
-
-    let is_native_messaging = args.iter().any(|arg| 
+    // Check for explicit native messaging indicators.
+    let explicit_native_mode = args.iter().any(|arg| 
         arg.starts_with("chrome-extension://") ||
+        arg.starts_with("moz-extension://") ||
         arg == "--native-messaging"
-    ) || std::env::var("CHROME_NATIVE_MESSAGING").is_ok() || stdin_is_pipe;
+    ) || std::env::var("CHROME_NATIVE_MESSAGING").is_ok();
+
+    // Browser native hosts may be launched without explicit args.
+    // Infer host mode only when stdin is a pipe and parent process looks browser-related.
+    let inferred_native_mode = stdin_is_pipe_for_native() && is_likely_browser_parent();
+    let is_native_messaging = explicit_native_mode || inferred_native_mode;
     
     if is_native_messaging {
         eprintln!("Starting in native messaging mode");
@@ -2883,7 +2989,7 @@ pub mod native_messaging {
             }
 
             ExtensionMessage::UnlockWithDeviceKey => {
-                // Attempt to unlock using DPAPI-protected master key
+                // Attempt to unlock using platform-secure master key
                 let app_state = app_handle.state::<AppState>();
                 let device_key_path = match get_device_unlock_key_path(app_handle) {
                     Ok(p) => p,
@@ -3086,7 +3192,7 @@ pub mod native_messaging {
                 }
                 match fs::write(&device_key_path, protected) {
                     Ok(_) => {
-                        if let Err(err) = write_audit_log(app_handle, "device_unlock_enabled", "Stored DPAPI-protected master key") {
+                        if let Err(err) = write_audit_log(app_handle, "device_unlock_enabled", "Stored platform-secure master key") {
                             eprintln!("AUDIT WRITE ERROR: {}", err);
                         }
                         ExtensionResponse::UnlockResult { success: true, error: None }

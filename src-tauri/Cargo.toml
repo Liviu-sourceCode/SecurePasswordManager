@@ -44,10 +44,18 @@ totp-rs = { version = "5.7.0", features = ["qr", "otpauth", "gen_secret"] }
 regex = "1.10.2"
 byteorder = "1.5.0"
 url = "2.5"
+hex = "0.4"
 
+# Platform-specific dependencies for secure storage
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["dpapi", "winerror", "winbase", "sysinfoapi", "iphlpapi", "winnt", "memoryapi", "processenv", "fileapi", "handleapi"] }
+winapi = { version = "0.3", features = ["dpapi", "winerror", "winbase", "sysinfoapi", "iphlpapi", "winnt", "memoryapi", "processenv", "fileapi", "handleapi", "wincrypt"] }
 windows = { version = "0.52", features = ["Win32_Foundation"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = "2.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = "2.3"
 
 [features]
 # default = [ "custom-protocol" ]

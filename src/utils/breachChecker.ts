@@ -317,13 +317,29 @@ class EnhancedBreachChecker {
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
-      const response = await fetch(`https://api.pwnedpasswords.com/range/${prefix}`, {
-        headers: { 
-          'Add-Padding': 'true',
-          'User-Agent': 'PasswordManager-BreachChecker/1.0'
-        },
-        signal: controller.signal
-      });
+      const endpoint = `https://api.pwnedpasswords.com/range/${prefix}`;
+      let response: Response;
+
+      try {
+        response = await fetch(endpoint, {
+          headers: {
+            'Add-Padding': 'true'
+          },
+          signal: controller.signal
+        });
+      } catch (firstError) {
+        const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+
+        // Some WebView/browser environments can fail on custom headers.
+        // Retry once without headers.
+        if (firstMessage.toLowerCase().includes('load failed') || firstMessage.toLowerCase().includes('failed to fetch')) {
+          response = await fetch(endpoint, {
+            signal: controller.signal
+          });
+        } else {
+          throw firstError;
+        }
+      }
 
       clearTimeout(timeoutId);
 
@@ -336,7 +352,7 @@ class EnhancedBreachChecker {
       
       for (const line of lines) {
         const [hashSuffix, countStr] = line.split(':');
-        if (hashSuffix === suffix) {
+        if (hashSuffix?.trim() === suffix) {
           return {
             isBreached: true,
             breachCount: parseInt(countStr.trim(), 10)
@@ -352,6 +368,9 @@ class EnhancedBreachChecker {
       if (error instanceof Error) {
         if (error.name === 'AbortError') {
           throw new Error(`Request timed out after ${timeout}ms`);
+        }
+        if (error.message.toLowerCase().includes('load failed') || error.message.toLowerCase().includes('failed to fetch')) {
+          throw new Error('Network request failed (connection blocked, offline, or WebView restriction)');
         }
         throw error;
       }

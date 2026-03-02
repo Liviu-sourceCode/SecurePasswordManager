@@ -8,8 +8,18 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "tauri:build:windows": "tauri build",
+    "tauri:build:linux": "NO_STRIP=1 tauri build --bundles appimage",
     "sync-host": "powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/sync-host.ps1",
-    "build:host": "cargo build --release --manifest-path src-tauri/Cargo.toml && npm run sync-host"
+    "sync-host:linux": "bash ./tools/sync-host.sh",
+    "sync-host:linux:chrome": "bash ./tools/sync-host.sh chrome",
+    "sync-host:linux:brave": "bash ./tools/sync-host.sh brave",
+    "sync-host:linux:firefox": "bash ./tools/sync-host.sh firefox",
+    "build:host": "cargo build --release --manifest-path src-tauri/Cargo.toml && npm run sync-host",
+    "build:host:linux": "cargo build --release --manifest-path src-tauri/Cargo.toml && npm run sync-host:linux",
+    "build:host:linux:brave": "cargo build --release --manifest-path src-tauri/Cargo.toml && npm run sync-host:linux:brave",
+    "build:host:linux:all": "cargo build --release --manifest-path src-tauri/Cargo.toml && npm run sync-host:linux",
+    "legal:bundle": "node ./tools/generate-legal-bundle.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
@@ -28,6 +38,7 @@
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.21",
+    "baseline-browser-mapping": "^2.10.0",
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.12",
     "typescript": "~5.8.3",
