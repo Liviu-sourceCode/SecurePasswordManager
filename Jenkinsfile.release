@@ -6,10 +6,6 @@ pipeline {
     disableConcurrentBuilds()
   }
 
-  triggers {
-    pollSCM('H/15 * * * *')
-  }
-
   environment {
     CARGO_HOME = "${WORKSPACE}/.cargo"
     RUSTUP_HOME = "${WORKSPACE}/.rustup"
