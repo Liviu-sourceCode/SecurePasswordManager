@@ -4,7 +4,7 @@ pipeline {
   options {
     timestamps()
     disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '25'))
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
   }
 
   triggers {
@@ -23,10 +23,14 @@ pipeline {
     stage('Checkout') {
       steps {
         checkout scm
+        sh 'date +%s > .build-start-epoch'
       }
     }
 
     stage('Preflight (Linux deps)') {
+      when {
+        branch 'main'
+      }
       steps {
         sh '''#!/usr/bin/env bash
 set -euo pipefail
@@ -83,6 +87,9 @@ echo "Linux dependency preflight passed."
     }
 
     stage('Ensure Rust Toolchain') {
+      when {
+        branch 'main'
+      }
       steps {
         sh '''#!/usr/bin/env bash
 set -euo pipefail
@@ -99,6 +106,9 @@ fi
     }
 
     stage('Toolchain') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'node --version'
         sh 'npm --version'
@@ -108,48 +118,163 @@ fi
     }
 
     stage('Install Dependencies') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'npm ci'
       }
     }
 
     stage('Frontend Build') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'npm run build'
       }
     }
 
     stage('Rust Check') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'cargo check --manifest-path src-tauri/Cargo.toml --all-targets'
       }
     }
 
     stage('Native Host (Release)') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'cargo build --release --manifest-path src-tauri/Cargo.toml'
       }
     }
 
     stage('Linux AppImage Build') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'npm run tauri:build:linux'
       }
     }
 
     stage('Legal Bundle') {
+      when {
+        branch 'main'
+      }
       steps {
         sh 'npm run legal:bundle'
+      }
+    }
+
+    stage('Checksums') {
+      when {
+        branch 'main'
+      }
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+mkdir -p build-artifacts
+
+if [ -f src-tauri/target/release/SecurePasswordManager ]; then
+  cp src-tauri/target/release/SecurePasswordManager build-artifacts/
+fi
+
+find src-tauri/target/release/bundle -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' \) -exec cp {} build-artifacts/ \; 2>/dev/null || true
+
+if [ -d build-artifacts ] && [ "$(find build-artifacts -type f | wc -l)" -gt 0 ]; then
+  (
+    cd build-artifacts
+    find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 \
+      | sort -z \
+      | xargs -0 sha256sum > SHA256SUMS.txt
+  )
+fi
+'''
+      }
+    }
+
+    stage('Build Summary') {
+      when {
+        branch 'main'
+      }
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+START_EPOCH=$(cat .build-start-epoch 2>/dev/null || echo "$(date +%s)")
+END_EPOCH=$(date +%s)
+ELAPSED=$((END_EPOCH - START_EPOCH))
+
+{
+  echo "Build Summary"
+  echo "============="
+  echo "Job: ${JOB_NAME}"
+  echo "Build: #${BUILD_NUMBER}"
+  echo "Branch: ${BRANCH_NAME:-unknown}"
+  echo "Commit: ${GIT_COMMIT:-unknown}"
+  echo "DurationSeconds: ${ELAPSED}"
+  echo
+  echo "Artifacts:"
+  find build-artifacts -maxdepth 1 -type f -printf "- %f\\n" 2>/dev/null || echo "- none"
+  if [ -f build-artifacts/SHA256SUMS.txt ]; then
+    echo
+    echo "Checksums:"
+    cat build-artifacts/SHA256SUMS.txt
+  fi
+} > build-summary.txt
+
+cat build-summary.txt
+'''
       }
     }
   }
 
   post {
     always {
-      archiveArtifacts artifacts: 'dist/**,licenses/**,src-tauri/target/release/SecurePasswordManager,src-tauri/target/release/bundle/**/*.AppImage,src-tauri/target/release/bundle/**/*.deb,src-tauri/target/release/bundle/**/*.rpm', allowEmptyArchive: true, fingerprint: true
+      archiveArtifacts artifacts: 'build-artifacts/**,licenses/**,build-summary.txt', allowEmptyArchive: true, fingerprint: true
     }
     failure {
       echo 'Build failed. Check stage logs and ensure Linux Tauri dependencies are installed on the Jenkins agent.'
+      sh '''#!/usr/bin/env bash
+set +e
+
+MESSAGE="[${JOB_NAME} #${BUILD_NUMBER}] FAILED on branch ${BRANCH_NAME:-unknown} @ ${GIT_COMMIT:-unknown}"
+echo "$MESSAGE"
+
+if [[ -n "${NOTIFY_WEBHOOK_URL:-}" ]]; then
+  python3 - <<'PY'
+import json
+import os
+import urllib.request
+
+url = os.getenv('NOTIFY_WEBHOOK_URL', '').strip()
+if url:
+    message = f"[{os.getenv('JOB_NAME')} #{os.getenv('BUILD_NUMBER')}] FAILED on branch {os.getenv('BRANCH_NAME', 'unknown')} @ {os.getenv('GIT_COMMIT', 'unknown')}"
+    data = json.dumps({"text": message}).encode('utf-8')
+    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+    urllib.request.urlopen(req, timeout=10).read()
+PY
+fi
+
+if [[ -n "${NOTIFY_EMAIL_TO:-}" ]] && command -v mail >/dev/null 2>&1; then
+  echo "$MESSAGE" | mail -s "Jenkins build failed: ${JOB_NAME} #${BUILD_NUMBER}" "$NOTIFY_EMAIL_TO"
+fi
+'''
+    }
+    success {
+      sh '''#!/usr/bin/env bash
+set +e
+if [[ -f build-summary.txt ]]; then
+  echo "----- Build Summary -----"
+  cat build-summary.txt
+fi
+'''
     }
   }
 }

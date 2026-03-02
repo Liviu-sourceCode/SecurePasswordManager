@@ -163,9 +163,12 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 
 #### Jenkins CI (Linux)
 
-This repository includes a Linux-first Jenkins pipeline at `Jenkinsfile`.
+This repository includes two Linux-first Jenkins pipelines:
 
-What it runs on each update:
+- `Jenkinsfile` → validation pipeline for `main`
+- `Jenkinsfile.release` → release pipeline for tags `v*`
+
+Validation pipeline (`Jenkinsfile`) on `main`:
 
 - `npm ci`
 - `npm run build`
@@ -173,20 +176,34 @@ What it runs on each update:
 - `cargo build --release --manifest-path src-tauri/Cargo.toml`
 - `npm run tauri:build:linux` (AppImage)
 - `npm run legal:bundle`
+- checksum generation (`SHA256SUMS.txt`)
+- run summary output (`build-summary.txt`)
 
-Artifacts archived by Jenkins:
+Validation artifacts archived:
 
-- `dist/`
+- `build-artifacts/` (binary + AppImage/deb/rpm when present + `SHA256SUMS.txt`)
 - `licenses/`
-- `src-tauri/target/release/SecurePasswordManager`
-- `src-tauri/target/release/bundle/**` (AppImage/deb/rpm if present)
+- `build-summary.txt`
+
+Release pipeline (`Jenkinsfile.release`) on tags `v*`:
+
+- runs the same build/packaging flow
+- collects output into `release-artifacts/`
+- writes `release-artifacts/SHA256SUMS.txt`
+- emits `release-summary.txt`
 
 Recommended Jenkins setup:
 
-1. Create a **Multibranch Pipeline** job and point it to this repository.
-2. Enable webhook from your Git provider for push/PR events.
-3. Keep SCM polling as fallback (already defined in `Jenkinsfile`).
-4. Use a Linux build agent with required system packages installed:
+1. Create **two Multibranch Pipeline jobs** pointing to this repository:
+   - Job A uses `Jenkinsfile` for `main` validation.
+   - Job B uses `Jenkinsfile.release` for tag releases.
+2. In Job B, enable **Tag Discovery** in branch source behavior.
+3. Set branch filters so:
+   - Job A builds `main`.
+   - Job B builds tags matching `v*`.
+4. Enable webhook from your Git provider if your Jenkins is publicly reachable.
+5. Keep SCM polling as fallback (already defined in both pipeline files).
+6. Use a Linux build agent with required system packages installed:
 
    ```bash
    # Debian/Ubuntu example for Tauri Linux builds
@@ -196,6 +213,49 @@ Recommended Jenkins setup:
      libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
      librsvg2-dev patchelf libdbus-1-dev
    ```
+
+Jenkins UI checklist (recommended):
+
+- **Job A: `secure-password-manager-main` (main validation)**
+  1. New Item → **Multibranch Pipeline**.
+  2. Branch Sources → connect your Git provider/repo.
+  3. Build Configuration → **by Jenkinsfile**.
+  4. Script Path → `Jenkinsfile`.
+  5. Behaviors / Discovery:
+     - Discover branches: **Only branches that are also filed as PRs = false** (build normal branches).
+     - Discover tags: **disabled**.
+  6. Head/branch filter:
+     - Include: `main`
+     - Exclude: (empty)
+
+- **Job B: `secure-password-manager-release` (tag releases)**
+  1. New Item → **Multibranch Pipeline**.
+  2. Branch Sources → same Git repository.
+  3. Build Configuration → **by Jenkinsfile**.
+  4. Script Path → `Jenkinsfile.release`.
+  5. Behaviors / Discovery:
+     - Discover branches: **disabled**.
+     - Discover tags: **enabled**.
+  6. Head/branch filter:
+     - Include: `v*`
+     - Exclude: (empty)
+
+- **Common settings (both jobs)**
+  - Scan Multibranch Pipeline Triggers: enable periodic scan (for example every 15 minutes) if webhooks are unavailable.
+  - Keep webhook enabled when Jenkins is publicly reachable; polling remains fallback.
+  - Ensure the Jenkins agent label points to a Linux worker with Tauri dependencies.
+  - Optional environment variables for notifications: `NOTIFY_WEBHOOK_URL`, `NOTIFY_EMAIL_TO`.
+
+Retention policy:
+
+- Validation job: keep last 20 successful builds/artifacts (configured in `Jenkinsfile`).
+- Release job: keep all tag builds/artifacts (configure job-level retention to preserve releases).
+
+Optional notifications (both pipelines):
+
+- Set `NOTIFY_WEBHOOK_URL` (JSON webhook receiving `{"text":"..."}` payload).
+- Set `NOTIFY_EMAIL_TO` (requires `mail` command on agent).
+- On failure, pipeline sends a short status message with job/build/branch-or-tag/commit.
 
 #### Browser Extension (Optional)
 
@@ -444,7 +504,8 @@ README.md                         # This file
 - **[browser-extension/NATIVE_MESSAGING_DEBUG.md](browser-extension/NATIVE_MESSAGING_DEBUG.md)** - Native messaging debugging guide
 - **[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)** - Open-source dependency notices and attribution summary
 - **[EULA.md](EULA.md)** - End-user license agreement template for commercial distribution
-- **`Jenkinsfile`** - Linux CI pipeline for automatic build and artifact generation
+- **`Jenkinsfile`** - Main branch validation pipeline (Linux)
+- **`Jenkinsfile.release`** - Tag-based release pipeline for `v*` builds
 - **`npm run legal:bundle`** - Generates a `licenses/` folder with third-party license texts and snapshot metadata
 
 ## 🤝 Contributing
