@@ -41,7 +41,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
 fi
 
 missing_tools=()
-for tool in git curl pkg-config node npm; do
+for tool in git curl pkg-config node npm patchelf; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     missing_tools+=("$tool")
   fi
