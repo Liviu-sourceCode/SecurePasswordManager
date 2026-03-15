@@ -205,6 +205,9 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
                     className="input-field-wizard"
                     disabled={isGenerating}
                   />
+                  {!state.accountName.trim() && (
+                    <p className="mt-2 text-sm text-amber-300">Account name is required to generate the QR code.</p>
+                  )}
                 </div>
               </div>
             </>
