@@ -64,7 +64,7 @@ if ! pkg-config --exists openssl; then
   missing_libs+=("openssl")
 fi
 
-if ! ldconfig -p | grep -qE 'libxdo\.so(\.3)?'; then
+if ! ldconfig -p | grep -qE 'libxdo\\.so(\\.3)?'; then
   missing_libs+=("libxdo")
 fi
 
