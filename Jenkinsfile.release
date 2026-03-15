@@ -41,9 +41,13 @@ for cmd in curl pkg-config gcc g++ make patchelf; do
   command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
 done
 
-for lib in libwebkit2gtk-4.1.so.0 libgtk-3.so.0 libayatana-appindicator3.so.1 libxdo.so.3; do
+for lib in libwebkit2gtk-4.1.so.0 libgtk-3.so.0 libayatana-appindicator3.so.1; do
   ldconfig -p | grep -q "$lib" || missing+=("$lib")
 done
+
+if ! pkg-config --exists xdo && ! test -f /usr/lib64/libxdo.so && ! test -f /usr/lib/libxdo.so; then
+  missing+=("libxdo (install libxdo-devel)")
+fi
 
 if [ ${#missing[@]} -gt 0 ]; then
   echo "Missing required dependencies: ${missing[*]}"
