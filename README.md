@@ -7,7 +7,7 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 ### 🛡️ Security Features
 
 #### **Military-Grade Encryption**
-- **AES-GCM 256-bit encryption** for vault storage
+- **XChaCha20-Poly1305 authenticated encryption** for vault storage
 - **Argon2id key derivation** with configurable parameters
 - **Salt-based encryption** for enhanced security
 - **Atomic file operations** to prevent data corruption
@@ -121,19 +121,19 @@ A modern, secure password manager built with Tauri, React, and TypeScript that p
 ✅ **macOS** - Full support with macOS Keychain  
 
 ### Prerequisites
-- Node.js (v16 or higher)
+- Node.js (v20 or higher)
 - Rust (latest stable)
 - npm or yarn package manager
-- **Linux only**: libdbus-1-dev (for keyring support)
+- **Linux only**: install required Tauri/system dependencies (see `INSTALLATION_LINUX.md` for distro-specific commands)
   ```bash
   # Debian/Ubuntu
-  sudo apt-get install libdbus-1-dev pkg-config
+   sudo apt-get install libdbus-1-dev pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
   
   # Fedora/RHEL
-  sudo dnf install dbus-devel
+   sudo dnf install dbus-devel gtk3-devel webkit2gtk4.1-devel libsoup3-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel patchelf gcc gcc-c++ make
   
   # Arch Linux
-  sudo pacman -S dbus
+   sudo pacman -S dbus gtk3 webkit2gtk libsoup3 openssl libappindicator-gtk3 librsvg xdotool patchelf base-devel
   ```
 
 ### Installation
@@ -346,7 +346,7 @@ Optional notifications (both pipelines):
 
 ### Encryption Process
 1. **Master password** is processed through Argon2id key derivation
-2. **Derived key** is used for AES-GCM encryption
+2. **Derived key** is used for XChaCha20-Poly1305 encryption
 3. **Salt and nonce** are generated for each encryption operation
 4. **Encrypted data** is stored in vault.enc file
 
@@ -387,7 +387,7 @@ The integrated security analysis provides:
 - **Modern ES modules**
 
 ### Backend
-- **Rust** with Tauri 2.9 framework
+- **Rust** with Tauri 2.10 framework
 - **Tokio** for async operations
 - **Serde** for serialization
 - **Ring/RustCrypto** for cryptography
@@ -396,7 +396,8 @@ The integrated security analysis provides:
 ### Security Libraries
 - **Web Crypto API** for client-side hashing
 - **Argon2** for key derivation
-- **AES-GCM** for authenticated encryption
+- **XChaCha20-Poly1305** for vault authenticated encryption
+- **AES-256-GCM** for browser extension host-to-extension payload encryption
 - **Secure random** for salt/nonce generation
 - **TOTP (RFC 6238)** for two-factor authentication
 - **Platform-specific secure storage**:

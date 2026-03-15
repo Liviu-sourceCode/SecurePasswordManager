@@ -4,19 +4,37 @@
 
 ### 1. Build and Install Prerequisites
 
-**Build the Tauri Application:**
+**Linux/macOS setup**
+
+Build the Tauri application:
+```bash
+# From repository root
+cargo build --release --manifest-path src-tauri/Cargo.toml
+```
+
+Install native messaging host:
+```bash
+# Linux (recommended, installs manifests for Chrome/Brave/Firefox)
+npm run build:host:linux:all
+```
+
+Update native messaging manifest if extension ID/path placeholders remain:
+- File: `~/.config/google-chrome/NativeMessagingHosts/com.passwordmanager.native.json`
+- Ensure `allowed_origins` contains your extension ID
+
+**Windows setup (separate)**
+
+Build the Tauri application and sync native host:
 ```powershell
 cd src-tauri
 cargo build --release
+cd ..
+npm run build:host
 ```
-✅ **Expected Result:** Executable created at `src-tauri/target/release/SecurePasswordManager.exe`
 
-**Install Native Messaging Host:**
-```powershell
-# For Chrome/Chromium
-New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\Google\Chrome\User Data\NativeMessagingHosts"
-Copy-Item "browser-extension\native-messaging-host\com.passwordmanager.native.json" "$env:LOCALAPPDATA\Google\Chrome\User Data\NativeMessagingHosts\"
-```
+✅ **Expected Result:** Executable created at:
+- Linux/macOS: `src-tauri/target/release/SecurePasswordManager`
+- Windows: `src-tauri/target/release/SecurePasswordManager.exe`
 
 **Load Browser Extension:**
 1. Open Chrome → `chrome://extensions/`
@@ -24,7 +42,7 @@ Copy-Item "browser-extension\native-messaging-host\com.passwordmanager.native.js
 3. Click "Load unpacked" → Select `browser-extension` folder
 4. Note the Extension ID (e.g., `abcdefghijklmnopqrstuvwxyz123456`)
 
-**Update Native Messaging Manifest:**
+**Update Native Messaging Manifest (Windows):**
 Edit `$env:LOCALAPPDATA\Google\Chrome\User Data\NativeMessagingHosts\com.passwordmanager.native.json`:
 ```json
 {
@@ -46,6 +64,12 @@ Edit `$env:LOCALAPPDATA\Google\Chrome\User Data\NativeMessagingHosts\com.passwor
 
 **Steps:**
 1. **Start the Password Manager app**
+   Linux/macOS:
+   ```bash
+   ./src-tauri/target/release/SecurePasswordManager
+   ```
+
+   Windows:
    ```powershell
    cd src-tauri/target/release
    ./SecurePasswordManager.exe
@@ -264,7 +288,7 @@ Edit `$env:LOCALAPPDATA\Google\Chrome\User Data\NativeMessagingHosts\com.passwor
 **Browser Compatibility:**
 1. **Test in Chrome**
 2. **Test in Edge** (Chromium-based)
-3. **Test in Firefox** (if manifest V2 compatible)
+3. **Test in Firefox** (WebExtensions developer mode)
 
 **Expected Results:**
 - ✅ Graceful error messages

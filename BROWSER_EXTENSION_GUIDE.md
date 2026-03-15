@@ -17,14 +17,44 @@ This guide covers the complete setup and testing of the Password Manager browser
 
 ### 1. Build the Tauri Application
 
+#### Linux/macOS
+
+```bash
+# From repository root
+cargo build --release --manifest-path src-tauri/Cargo.toml
+```
+
+Binary output: `src-tauri/target/release/SecurePasswordManager`
+
+For Linux, the recommended setup is script-driven:
+
+```bash
+npm run build:host:linux:all
+```
+
+This builds the host binary, copies it to `native-host-bin/`, and installs browser manifests.
+
+#### Windows
+
 ```powershell
 cd src-tauri
 cargo build --release
 ```
 
-The executable will be located at: `src-tauri/target/release/SecurePasswordManager.exe`
+Binary output: `src-tauri/target/release/SecurePasswordManager.exe`
 
 ### 2. Install Native Messaging Host
+
+#### Linux/macOS (recommended)
+
+```bash
+# Automatic setup for Linux browsers
+npm run build:host:linux:all
+```
+
+This installs native messaging manifests for Chrome/Brave/Firefox and updates host paths.
+
+#### Windows (separate setup)
 
 #### For Chrome/Chromium:
 
@@ -231,7 +261,7 @@ cargo run
 ### Browser Compatibility:
 
 - ✅ Chrome/Chromium (Manifest V3)
-- ✅ Firefox (Manifest V2 compatible)
+- ✅ Firefox (WebExtensions; loaded temporarily in developer mode)
 - ✅ Edge (Chromium-based)
 
 ## Next Steps

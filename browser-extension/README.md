@@ -14,29 +14,66 @@ This browser extension provides seamless integration between your Password Manag
 
 ### 1. Build the Tauri Application
 
-First, make sure your Password Manager Tauri application is built:
+#### Linux/macOS
 
 ```bash
+# From repository root
+cargo build --release --manifest-path src-tauri/Cargo.toml
+```
+
+Build and sync native messaging host:
+
+```bash
+# Linux (Chrome + Brave + Firefox)
+npm run build:host:linux:all
+
+# Linux (single browser)
+npm run build:host:linux:chrome
+npm run build:host:linux:brave
+npm run build:host:linux
+```
+
+#### Windows
+
+```powershell
 cd src-tauri
-cargo build
+cargo build --release
+cd ..
+npm run build:host
 ```
 
 ### 2. Install Native Messaging Host
 
 The browser needs to know how to communicate with your Tauri app. You need to register the native messaging host:
 
-#### For Chrome/Chromium:
+#### Linux/macOS
+
+Use the sync script for automatic setup (recommended):
+
+```bash
+npm run build:host:linux:all
+```
+
+If needed, install manifests manually:
+
+1. Copy the Chrome manifest to `~/.config/google-chrome/NativeMessagingHosts/`
+2. Copy the Firefox manifest to `~/.mozilla/native-messaging-hosts/`
+3. Update `YOUR_EXTENSION_ID` and host `path` in the copied files
+
+#### Windows
+
+##### Chrome/Chromium:
 
 1. Copy the native messaging host manifest to the appropriate location:
    - **Windows**: `%LOCALAPPDATA%\Google\Chrome\User Data\NativeMessagingHosts\`
    - **macOS**: `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`
    - **Linux**: `~/.config/google-chrome/NativeMessagingHosts/`
 
-2. Update the manifest file `com.passwordmanager.native.json`:
-   - Replace `EXTENSION_ID_PLACEHOLDER` with your actual extension ID
+2. Update the manifest file (`com.passwordmanager.native.json` or `com.passwordmanager.native.linux.json`):
+   - Replace `YOUR_EXTENSION_ID` with your actual extension ID
    - Update the `path` to point to your built Tauri executable
 
-#### For Firefox:
+##### Firefox:
 
 1. Copy the manifest to:
    - **Windows**: `%LOCALAPPDATA%\Mozilla\NativeMessagingHosts\`
@@ -62,10 +99,20 @@ The browser needs to know how to communicate with your Tauri app. You need to re
 
 ### 4. Update Native Messaging Host
 
+#### Linux/macOS
+
+1. Edit the installed manifest(s):
+   - `~/.config/google-chrome/NativeMessagingHosts/com.passwordmanager.native.json`
+   - `~/.mozilla/native-messaging-hosts/com.passwordmanager.native.json`
+2. Replace `YOUR_EXTENSION_ID` with the actual extension ID
+3. Ensure `path` points to your local `native-host-bin/SecurePasswordManager`
+
+#### Windows
+
 After loading the extension and getting the extension ID:
 
 1. Edit `native-messaging-host/com.passwordmanager.native.json`
-2. Replace `EXTENSION_ID_PLACEHOLDER` with the actual extension ID
+2. Replace `YOUR_EXTENSION_ID` with the actual extension ID
 3. Copy the updated manifest to the native messaging hosts directory
 
 ## Usage
