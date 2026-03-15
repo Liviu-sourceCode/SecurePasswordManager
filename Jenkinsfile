@@ -64,6 +64,10 @@ if ! pkg-config --exists openssl; then
   missing_libs+=("openssl")
 fi
 
+if ! ldconfig -p | grep -qE 'libxdo\.so(\.3)?'; then
+  missing_libs+=("libxdo")
+fi
+
 if [[ ${#missing_tools[@]} -gt 0 || ${#missing_libs[@]} -gt 0 ]]; then
   echo "ERROR: Jenkins agent is missing required Linux build dependencies."
   if [[ ${#missing_tools[@]} -gt 0 ]]; then
@@ -74,10 +78,10 @@ if [[ ${#missing_tools[@]} -gt 0 || ${#missing_libs[@]} -gt 0 ]]; then
   fi
   echo
   echo "Install commands (pick one for your distro):"
-  echo "- Fedora/RHEL/CentOS: sudo dnf install -y git curl pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel libsoup3-devel openssl-devel libayatana-appindicator-gtk3-devel librsvg2-devel patchelf"
-  echo "- Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y build-essential git curl pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf"
-  echo "- Arch: sudo pacman -Sy --needed base-devel git curl pkgconf gtk3 webkit2gtk-4.1 libsoup3 openssl libappindicator-gtk3 librsvg patchelf"
-  echo "- openSUSE: sudo zypper install -y gcc gcc-c++ make git curl pkgconf-pkg-config gtk3-devel webkit2gtk3-devel libsoup-3_0-devel libopenssl-devel libayatana-appindicator-gtk3-devel librsvg-devel patchelf"
+  echo "- Fedora/RHEL/CentOS: sudo dnf install -y git curl pkgconf-pkg-config gtk3-devel webkit2gtk4.1-devel libsoup3-devel openssl-devel libayatana-appindicator-gtk3-devel librsvg2-devel libxdo-devel patchelf"
+  echo "- Ubuntu/Debian: sudo apt-get update && sudo apt-get install -y build-essential git curl pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf"
+  echo "- Arch: sudo pacman -Sy --needed base-devel git curl pkgconf gtk3 webkit2gtk-4.1 libsoup3 openssl libappindicator-gtk3 librsvg xdotool patchelf"
+  echo "- openSUSE: sudo zypper install -y gcc gcc-c++ make git curl pkgconf-pkg-config gtk3-devel webkit2gtk3-devel libsoup-3_0-devel libopenssl-devel libayatana-appindicator-gtk3-devel librsvg-devel xdotool-devel patchelf"
   exit 1
 fi
 
