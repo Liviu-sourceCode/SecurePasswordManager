@@ -18,9 +18,11 @@ interface TOTPState {
   totpCode: string;
 }
 
+const DEFAULT_TOTP_ISSUER = 'SecurePasswordManager';
+
 const initialState: TOTPState = {
   accountName: 'user',
-  issuer: 'SecurePasswordManager',
+  issuer: DEFAULT_TOTP_ISSUER,
   provisioningUri: '',
   secret: '',
   error: '',
@@ -90,9 +92,13 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
       if (!isTauriEnv()) {
         throw new Error('Tauri APIs not available in browser preview.');
       }
+      const accountName = state.accountName.trim();
+      if (!accountName) {
+        throw new Error('Account name is required to generate a QR code.');
+      }
       await invoke('set_totp_account', {
-        accountName: state.accountName.trim() || 'user',
-        issuer: state.issuer.trim() || 'SecurePasswordManager',
+        accountName,
+        issuer: DEFAULT_TOTP_ISSUER,
       });
       const { uri, secret } = await invoke<{ uri: string; secret: string }>('init_totp');
       dispatch({ type: 'GENERATE_SUCCESS', payload: { uri, secret } });
@@ -117,6 +123,7 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
 
   const validateIssuerAndAccount = (value: string): string | undefined => {
     if (value.length > 100) return 'Must not exceed 100 characters';
+    if (!value) return undefined;
     if (!/^[a-zA-Z0-9\s.-_]+$/.test(value)) {
       return 'Only letters, numbers, spaces, dots, hyphens, and underscores are allowed';
     }
@@ -148,6 +155,7 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
   const isVerifying = state.status === 'verifying';
   const isVerified = state.status === 'verified';
   const hasGenerated = state.status === 'generated' || state.status === 'verifying' || state.status === 'verified';
+  const canGenerate = !isGenerating && state.accountName.trim().length > 0;
 
   return (
     <div className="modal-overlay">
@@ -167,7 +175,7 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
           {!hasGenerated ? (
             <>
               <p className="text-sm text-gray-400 text-center mb-6">
-                Customize the issuer and account name for your authenticator app.
+                Confirm the default issuer and choose the account name shown in your authenticator app.
               </p>
               <div className="space-y-4 mb-6">
                 <div className="form-row">
@@ -175,16 +183,10 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
                   <input
                     id="issuer"
                     type="text"
-                    value={state.issuer}
-                    onChange={(e) => {
-                      const sanitized = sanitizeInput(e.target.value);
-                      const error = validateIssuerAndAccount(sanitized);
-                      if (!error) {
-                        dispatch({ type: 'SET_FIELD', field: 'issuer', payload: sanitized });
-                      }
-                    }}
+                    value={DEFAULT_TOTP_ISSUER}
                     className="input-field-wizard"
-                    disabled={isGenerating}
+                    disabled
+                    readOnly
                   />
                 </div>
                 <div className="form-row">
@@ -226,7 +228,7 @@ const TOTPSetup: React.FC<TOTPSetupProps> = ({ onClose, onEnabled }) => {
 
           <div className="controls flex justify-center items-center mb-4">
             {!hasGenerated && (
-              <button onClick={handleGenerate} disabled={isGenerating} className="btn btn-primary">
+              <button onClick={handleGenerate} disabled={!canGenerate} className="btn btn-primary">
                 {isGenerating ? 'Generating...' : 'Generate QR Code'}
               </button>
             )}
