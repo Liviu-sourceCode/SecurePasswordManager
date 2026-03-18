@@ -154,14 +154,24 @@ if not defined VSINSTALL (
 call "%VSINSTALL%\\Common7\\Tools\\VsDevCmd.bat" -arch=x64 -host_arch=x64
 
 node -v
-npm -v
+call npm -v
 rustc -V
 cargo -V
 
-call npm ci
-if errorlevel 1 (
-  echo ERROR: npm ci failed.
-  exit /b 1
+if exist package-lock.json (
+  echo Using npm ci (lockfile detected)
+  call npm ci
+  if errorlevel 1 (
+    echo ERROR: npm ci failed.
+    exit /b 1
+  )
+) else (
+  echo WARNING: package-lock.json not found, falling back to npm install
+  call npm install
+  if errorlevel 1 (
+    echo ERROR: npm install failed.
+    exit /b 1
+  )
 )
 
 call npm run tauri:build:windows
