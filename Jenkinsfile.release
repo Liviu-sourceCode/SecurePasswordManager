@@ -264,32 +264,9 @@ cat release-summary.txt
       }
     }
     failure {
-      node('linux') {
-        sh '''#!/usr/bin/env bash
-set +e
-
-MESSAGE="[${JOB_NAME} #${BUILD_NUMBER}] RELEASE FAILED for tag ${TAG_NAME:-unknown} @ ${GIT_COMMIT:-unknown}"
-echo "$MESSAGE"
-
-if [[ -n "${NOTIFY_WEBHOOK_URL:-}" ]]; then
-  python3 - <<'PY'
-import json
-import os
-import urllib.request
-
-url = os.getenv('NOTIFY_WEBHOOK_URL', '').strip()
-if url:
-    message = f"[{os.getenv('JOB_NAME')} #{os.getenv('BUILD_NUMBER')}] RELEASE FAILED for tag {os.getenv('TAG_NAME', 'unknown')} @ {os.getenv('GIT_COMMIT', 'unknown')}"
-    data = json.dumps({"text": message}).encode('utf-8')
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
-    urllib.request.urlopen(req, timeout=10).read()
-PY
-fi
-
-if [[ -n "${NOTIFY_EMAIL_TO:-}" ]] && command -v mail >/dev/null 2>&1; then
-  echo "$MESSAGE" | mail -s "Jenkins release failed: ${JOB_NAME} #${BUILD_NUMBER}" "$NOTIFY_EMAIL_TO"
-fi
-'''
+      script {
+        def message = "[${env.JOB_NAME} #${env.BUILD_NUMBER}] RELEASE FAILED for tag ${env.TAG_NAME ?: 'unknown'} @ ${env.GIT_COMMIT ?: 'unknown'}"
+        echo message
       }
     }
   }
