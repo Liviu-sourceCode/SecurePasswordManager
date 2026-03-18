@@ -133,6 +133,37 @@ rustup component add rustfmt clippy
       }
     }
 
+    stage('Windows Build') {
+      agent {
+        label 'windows'
+      }
+      steps {
+        checkout scm
+        bat '''@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+
+if not defined VSINSTALL (
+  echo ERROR: Visual Studio C++ Build Tools not found.
+  exit /b 1
+)
+
+call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64
+
+node -v
+npm -v
+rustc -V
+cargo -V
+
+npm ci
+npm run tauri:build:windows
+'''
+
+        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**/*', allowEmpty: false
+      }
+    }
+
     stage('Legal Bundle') {
       steps {
         sh 'npm run legal:bundle'
@@ -168,6 +199,21 @@ if [ "$(find release-artifacts -type f | wc -l)" -eq 0 ]; then
   echo "No release artifacts produced."
   exit 1
 fi
+
+(
+  cd release-artifacts
+  find . -type f ! -name 'SHA256SUMS.txt' -print0 \
+    | sort -z \
+    | xargs -0 sha256sum > SHA256SUMS.txt
+)
+'''
+
+        unstash 'windows-release-bundles'
+
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+find src-tauri/target/release/bundle -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
 
 (
   cd release-artifacts
