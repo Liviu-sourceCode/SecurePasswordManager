@@ -151,21 +151,37 @@ if not defined VSINSTALL (
 
 call "%VSINSTALL%\\Common7\\Tools\\VsDevCmd.bat" -arch=x64 -host_arch=x64
 
+set "CARGO_HOME=%USERPROFILE%\\.cargo"
+set "RUSTUP_HOME=%USERPROFILE%\\.rustup"
+set "PATH=%CARGO_HOME%\\bin;%PATH%"
+
+where rustup
+if errorlevel 1 (
+  echo ERROR: rustup is required on windows10-vm but was not found on PATH.
+  exit /b 1
+)
+
+call rustup toolchain install stable-x86_64-pc-windows-msvc
+if errorlevel 1 (
+  echo ERROR: Failed to install MSVC Rust toolchain.
+  exit /b 1
+)
+call rustup default stable-x86_64-pc-windows-msvc
+if errorlevel 1 (
+  echo ERROR: Failed to set default MSVC Rust toolchain.
+  exit /b 1
+)
+
 node -v
 call npm -v
-rustc -V
-cargo -V
-rustc -vV
+call rustup run stable-x86_64-pc-windows-msvc rustc -V
+call rustup run stable-x86_64-pc-windows-msvc cargo -V
+call rustup run stable-x86_64-pc-windows-msvc rustc -vV
 
-where rustup >nul 2>nul
+call rustup target add x86_64-pc-windows-msvc
 if errorlevel 1 (
-  echo WARNING: rustup not found on PATH, skipping target installation step.
-) else (
-  call rustup target add x86_64-pc-windows-msvc
-  if errorlevel 1 (
-    echo ERROR: Failed to install Rust target x86_64-pc-windows-msvc.
-    exit /b 1
-  )
+  echo ERROR: Failed to install Rust target x86_64-pc-windows-msvc.
+  exit /b 1
 )
 set "CARGO_BUILD_TARGET=x86_64-pc-windows-msvc"
 
@@ -191,7 +207,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cargo build --release --manifest-path src-tauri\\Cargo.toml --target x86_64-pc-windows-msvc
+call rustup run stable-x86_64-pc-windows-msvc cargo build --release --manifest-path src-tauri\\Cargo.toml --target x86_64-pc-windows-msvc
 if errorlevel 1 (
   echo ERROR: Windows cargo build failed.
   exit /b 1
