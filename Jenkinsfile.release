@@ -9,7 +9,7 @@ pipeline {
   environment {
     CARGO_HOME = "${WORKSPACE}/.cargo"
     RUSTUP_HOME = "${WORKSPACE}/.rustup"
-    PATH = "${WORKSPACE}/.cargo/bin:${PATH}"
+    PATH+RUST = "${WORKSPACE}/.cargo/bin"
   }
 
   stages {
@@ -255,10 +255,17 @@ cat release-summary.txt
 
   post {
     always {
-      archiveArtifacts artifacts: 'release-artifacts/**,release-summary.txt', allowEmptyArchive: false, fingerprint: true
+      script {
+        if (env.WORKSPACE?.trim()) {
+          archiveArtifacts artifacts: 'release-artifacts/**,release-summary.txt', allowEmptyArchive: true, fingerprint: true
+        } else {
+          echo 'Skipping artifact archival: no workspace context available.'
+        }
+      }
     }
     failure {
-      sh '''#!/usr/bin/env bash
+      node('linux') {
+        sh '''#!/usr/bin/env bash
 set +e
 
 MESSAGE="[${JOB_NAME} #${BUILD_NUMBER}] RELEASE FAILED for tag ${TAG_NAME:-unknown} @ ${GIT_COMMIT:-unknown}"
@@ -283,6 +290,7 @@ if [[ -n "${NOTIFY_EMAIL_TO:-}" ]] && command -v mail >/dev/null 2>&1; then
   echo "$MESSAGE" | mail -s "Jenkins release failed: ${JOB_NAME} #${BUILD_NUMBER}" "$NOTIFY_EMAIL_TO"
 fi
 '''
+      }
     }
   }
 }
