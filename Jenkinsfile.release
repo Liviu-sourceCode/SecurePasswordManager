@@ -158,8 +158,17 @@ npm -v
 rustc -V
 cargo -V
 
-npm ci
-npm run tauri:build:windows
+call npm ci
+if errorlevel 1 (
+  echo ERROR: npm ci failed.
+  exit /b 1
+)
+
+call npm run tauri:build:windows
+if errorlevel 1 (
+  echo ERROR: tauri Windows build failed.
+  exit /b 1
+)
 
 if not exist "src-tauri\\target\\release\\bundle" (
   echo ERROR: Windows bundle output folder not found: src-tauri\\target\\release\\bundle
@@ -171,7 +180,7 @@ echo Windows bundle files:
 dir /s /b "src-tauri\\target\\release\\bundle"
 '''
 
-        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**', allowEmpty: false
+        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**,src-tauri/target/release/*.exe,src-tauri/target/release/*.msi,src-tauri/target/release/*.zip', allowEmpty: false
       }
     }
 
@@ -225,6 +234,7 @@ fi
 set -euo pipefail
 
 find src-tauri/target/release/bundle -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
+find src-tauri/target/release -maxdepth 1 -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
 
 (
   cd release-artifacts
