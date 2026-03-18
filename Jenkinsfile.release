@@ -160,9 +160,18 @@ cargo -V
 
 npm ci
 npm run tauri:build:windows
+
+if not exist "src-tauri\\target\\release\\bundle" (
+  echo ERROR: Windows bundle output folder not found: src-tauri\\target\\release\\bundle
+  if exist "src-tauri\\target\\release" dir /s /b "src-tauri\\target\\release"
+  exit /b 1
+)
+
+echo Windows bundle files:
+dir /s /b "src-tauri\\target\\release\\bundle"
 '''
 
-        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**/*', allowEmpty: false
+        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**', allowEmpty: false
       }
     }
 
