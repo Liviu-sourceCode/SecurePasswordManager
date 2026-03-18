@@ -158,6 +158,13 @@ call npm -v
 rustc -V
 cargo -V
 
+call rustup target add x86_64-pc-windows-msvc
+if errorlevel 1 (
+  echo ERROR: Failed to install Rust target x86_64-pc-windows-msvc.
+  exit /b 1
+)
+set "CARGO_BUILD_TARGET=x86_64-pc-windows-msvc"
+
 if exist package-lock.json (
   echo Using npm ci (lockfile detected)
   call npm ci
