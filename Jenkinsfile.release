@@ -9,7 +9,6 @@ pipeline {
   environment {
     CARGO_HOME = "${WORKSPACE}/.cargo"
     RUSTUP_HOME = "${WORKSPACE}/.rustup"
-    PATH+RUST = "${WORKSPACE}/.cargo/bin"
   }
 
   stages {
