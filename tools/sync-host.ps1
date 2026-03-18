@@ -56,7 +56,7 @@ function Get-UnpackedExtensionId {
     }
     return $null
   } catch {
-    Write-Warn "Failed to parse Preferences at $PreferencesPath: $($_.Exception.Message)"
+    Write-Warn "Failed to parse Preferences at $(PreferencesPath): $($_.Exception.Message)"
     return $null
   }
 }
