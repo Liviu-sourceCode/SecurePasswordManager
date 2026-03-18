@@ -185,23 +185,25 @@ if exist package-lock.json (
   )
 )
 
-call npm run tauri:build:windows
+call npm run tauri:build:windows -- --bundles none
 if errorlevel 1 (
   echo ERROR: tauri Windows build failed.
   exit /b 1
 )
 
-if not exist "src-tauri\\target\\release\\bundle" (
-  echo ERROR: Windows bundle output folder not found: src-tauri\\target\\release\\bundle
+if not exist "src-tauri\\target\\x86_64-pc-windows-msvc\\release\\SecurePasswordManager.exe" if not exist "src-tauri\\target\\release\\SecurePasswordManager.exe" (
+  echo ERROR: Windows executable output not found.
+  if exist "src-tauri\\target\\x86_64-pc-windows-msvc\\release" dir /s /b "src-tauri\\target\\x86_64-pc-windows-msvc\\release"
   if exist "src-tauri\\target\\release" dir /s /b "src-tauri\\target\\release"
   exit /b 1
 )
 
-echo Windows bundle files:
-dir /s /b "src-tauri\\target\\release\\bundle"
+echo Windows release files:
+if exist "src-tauri\\target\\x86_64-pc-windows-msvc\\release" dir /s /b "src-tauri\\target\\x86_64-pc-windows-msvc\\release"
+if exist "src-tauri\\target\\release" dir /s /b "src-tauri\\target\\release"
 '''
 
-        stash name: 'windows-release-bundles', includes: 'src-tauri/target/release/bundle/**,src-tauri/target/release/*.exe,src-tauri/target/release/*.msi,src-tauri/target/release/*.zip', allowEmpty: false
+        stash name: 'windows-release-bundles', includes: 'src-tauri/target/x86_64-pc-windows-msvc/release/*.exe,src-tauri/target/x86_64-pc-windows-msvc/release/*.msi,src-tauri/target/x86_64-pc-windows-msvc/release/*.zip,src-tauri/target/release/*.exe,src-tauri/target/release/*.msi,src-tauri/target/release/*.zip', allowEmpty: false
       }
     }
 
@@ -256,6 +258,7 @@ set -euo pipefail
 
 find src-tauri/target/release/bundle -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
 find src-tauri/target/release -maxdepth 1 -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
+find src-tauri/target/x86_64-pc-windows-msvc/release -maxdepth 1 -type f '(' -name '*.exe' -o -name '*.msi' -o -name '*.zip' ')' -exec cp {} release-artifacts/ ';' 2>/dev/null || true
 
 (
   cd release-artifacts
