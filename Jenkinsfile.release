@@ -83,10 +83,11 @@ set -euo pipefail
 
 if ! command -v rustup >/dev/null 2>&1; then
   echo "Rustup not found, installing user-local toolchain..."
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+  RUSTUP_INIT_SKIP_PATH_CHECK=yes curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 fi
 
-source "$HOME/.cargo/env" 2>/dev/null || true
+export PATH="$CARGO_HOME/bin:$PATH"
+source "$CARGO_HOME/env" 2>/dev/null || true
 rustup default stable
 rustup component add rustfmt clippy
 '''
