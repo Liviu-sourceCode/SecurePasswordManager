@@ -58,5 +58,5 @@ keyring = "2.3"
 keyring = "2.3"
 
 [features]
-# default = [ "custom-protocol" ]
-# custom-protocol = [ "tauri/custom-protocol" ]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
