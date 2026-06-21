@@ -22,6 +22,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
+        deleteDir()
         checkout scm
         sh 'date +%s > .build-start-epoch'
       }
