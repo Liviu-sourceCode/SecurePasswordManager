@@ -2595,6 +2595,10 @@ pub mod native_messaging {
     static EXTENSION_SESSIONS: LazyLock<Mutex<std::collections::HashMap<String, ExtensionSession>>> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
     #[allow(dead_code)]
     static RATE_LIMITER: LazyLock<Mutex<std::collections::HashMap<String, RateLimitInfo>>> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+    const EXTENSION_SESSION_TTL: Duration = Duration::from_secs(3600);
+    const RATE_LIMITER_TTL: Duration = Duration::from_secs(900);
+    const SESSION_CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
     
     #[derive(Debug, Clone)]
     struct ExtensionSession {
@@ -2677,6 +2681,31 @@ pub mod native_messaging {
         OsRng.fill_bytes(&mut token);
         BASE64.encode(token)
     }
+
+    fn cleanup_expired_extension_sessions() {
+        let now = Instant::now();
+
+        if let Ok(mut sessions) = EXTENSION_SESSIONS.lock() {
+            sessions.retain(|_, session| {
+                now.duration_since(session.last_activity) < EXTENSION_SESSION_TTL
+                    && session.failed_attempts < 5
+            });
+        }
+
+        if let Ok(mut rate_limiter) = RATE_LIMITER.lock() {
+            rate_limiter.retain(|_, info| {
+                info.requests.retain(|&request_time| now.duration_since(request_time) < RATE_LIMITER_TTL);
+                !info.requests.is_empty() || now.duration_since(info.last_reset) < RATE_LIMITER_TTL
+            });
+        }
+    }
+
+    fn spawn_session_cleanup_task() {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(SESSION_CLEANUP_INTERVAL);
+            cleanup_expired_extension_sessions();
+        });
+    }
     
     // Rate limiting functions
     #[allow(dead_code)]
@@ -2692,6 +2721,7 @@ pub mod native_messaging {
             });
             
             // Remove old requests outside the window
+            spawn_session_cleanup_task();
             rate_info.requests.retain(|&request_time| now.duration_since(request_time) < RATE_LIMIT_WINDOW);
             
             // Check if we're under the limit
@@ -3536,6 +3566,8 @@ pub mod native_messaging {
     pub async fn run_native_messaging_host(app_handle: AppHandle) -> io::Result<()> {
         let stdin = io::stdin();
         let stdout = io::stdout();
+
+        spawn_session_cleanup_task();
         
         // Initialize security logging
         eprintln!("=== NATIVE MESSAGING HOST STARTED ===");
