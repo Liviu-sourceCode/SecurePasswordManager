@@ -6,9 +6,11 @@ import { isTauriEnv } from '../utils/tauriEnv';
 
 interface SetupWizardProps {
   onComplete: (entries: PasswordEntry[]) => void;
+  onSetupBrowserExtension?: () => void;
+  isSettingUpBrowserExtension?: boolean;
 }
 
-export function SetupWizard({ onComplete }: SetupWizardProps) {
+export function SetupWizard({ onComplete, onSetupBrowserExtension, isSettingUpBrowserExtension = false }: SetupWizardProps) {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [strengthResult, setStrengthResult] = useState<PasswordStrengthResult | null>(null);
@@ -135,6 +137,16 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
             >
               {isCreating ? 'Creating Vault...' : 'Create Vault'}
             </button>
+            {onSetupBrowserExtension && (
+              <button
+                type="button"
+                onClick={onSetupBrowserExtension}
+                disabled={isSettingUpBrowserExtension}
+                className="btn btn-secondary w-full mt-3"
+              >
+                {isSettingUpBrowserExtension ? 'Setting Up Browser Extension...' : 'Setup Browser Extension'}
+              </button>
+            )}
           </div>
         </div>
       </div>

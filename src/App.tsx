@@ -33,6 +33,7 @@ export default function App() {
   const [vaultExists, setVaultExists] = useState<boolean | null>(null); // null = checking, true/false = result
   const [showTotpSetup, setShowTotpSetup] = useState(false);
   const [totpEnabled, setTotpEnabled] = useState(false);
+  const [isSettingUpBrowserExtension, setIsSettingUpBrowserExtension] = useState(false);
   const {
     notifications,
     addNotification,
@@ -257,6 +258,39 @@ export default function App() {
     }
   };
 
+  const handleSetupBrowserExtension = async () => {
+    if (!isTauriEnv()) {
+      addNotification({
+        type: 'info',
+        title: 'Browser Extension Setup',
+        message: 'Run the desktop app to automatically install the browser native messaging host.',
+        duration: 6000,
+      });
+      return;
+    }
+
+    setIsSettingUpBrowserExtension(true);
+    try {
+      const output = await invoke<string>('setup_browser_extension');
+      addNotification({
+        type: 'success',
+        title: '✅ Browser Extension Ready',
+        message: output.trim() || 'Native messaging host installed successfully.',
+        duration: 7000,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      addNotification({
+        type: 'error',
+        title: '❌ Browser Setup Failed',
+        message,
+        duration: 8000,
+      });
+    } finally {
+      setIsSettingUpBrowserExtension(false);
+    }
+  };
+
   const handleExportVault = async () => {
     try {
       if (!isTauriEnv()) {
@@ -450,7 +484,11 @@ export default function App() {
   if (vaultExists === false && isLocked) {
     return (
       <div>
-        <SetupWizard onComplete={handleSetupComplete} />
+        <SetupWizard
+          onComplete={handleSetupComplete}
+          onSetupBrowserExtension={handleSetupBrowserExtension}
+          isSettingUpBrowserExtension={isSettingUpBrowserExtension}
+        />
       </div>
     );
   }
@@ -459,7 +497,11 @@ export default function App() {
   if (vaultExists === true && isLocked) {
     return (
       <div>
-        <UnlockForm onUnlock={handleUnlock} />
+        <UnlockForm
+          onUnlock={handleUnlock}
+          onSetupBrowserExtension={handleSetupBrowserExtension}
+          isSettingUpBrowserExtension={isSettingUpBrowserExtension}
+        />
       </div>
     );
   }

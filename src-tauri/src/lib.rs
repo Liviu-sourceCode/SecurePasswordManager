@@ -17,6 +17,7 @@ use std::{
     io::{Write, Read, IsTerminal},
 
     path::PathBuf,
+    process::Command,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -2275,6 +2276,8 @@ async fn check_auto_lock(handle: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use native_messaging::setup_browser_extension;
+
     // Check if we should run in native messaging mode
     let args: Vec<String> = std::env::args().collect();
     
@@ -2393,6 +2396,7 @@ pub fn run() {
             set_totp_account,
             totp_account_status,
             keep_session_alive,
+            setup_browser_extension,
         ])
         .setup(|app| {
             let handle = app.handle();
@@ -2706,6 +2710,82 @@ pub mod native_messaging {
             cleanup_expired_extension_sessions();
         });
     }
+
+    fn find_project_root() -> Option<PathBuf> {
+        let mut current = std::env::current_dir().ok()?;
+
+        loop {
+            if current.join("tools").join("sync-host.sh").exists()
+                || current.join("tools").join("sync-host.ps1").exists()
+            {
+                return Some(current);
+            }
+
+            if !current.pop() {
+                break;
+            }
+        }
+
+        None
+    }
+
+    #[tauri::command]
+    pub fn setup_browser_extension() -> Result<String, String> {
+        let project_root = find_project_root().ok_or_else(|| {
+            "Unable to locate the project root. Run the setup script from the repository root.".to_string()
+        })?;
+
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut cmd = Command::new("powershell");
+            cmd.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "./tools/sync-host.ps1",
+            ]);
+            cmd
+        };
+
+        #[cfg(not(target_os = "windows"))]
+        let mut command = {
+            let mut cmd = Command::new("bash");
+            cmd.args(["./tools/sync-host.sh"]);
+            cmd
+        };
+
+        let output = command
+            .current_dir(&project_root)
+            .output()
+            .map_err(|err| format!("Failed to run browser setup script: {}", err))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if output.status.success() {
+            let mut summary = String::new();
+            if !stdout.trim().is_empty() {
+                summary.push_str(stdout.trim());
+            }
+            if !stderr.trim().is_empty() {
+                if !summary.is_empty() {
+                    summary.push('\n');
+                }
+                summary.push_str(stderr.trim());
+            }
+            if summary.is_empty() {
+                summary = "Browser extension setup completed.".to_string();
+            }
+            Ok(summary)
+        } else {
+            Err(format!(
+                "Browser setup failed. stdout: {} stderr: {}",
+                stdout.trim(),
+                stderr.trim()
+            ))
+        }
+    }
     
     // Rate limiting functions
     #[allow(dead_code)]
@@ -2721,7 +2801,6 @@ pub mod native_messaging {
             });
             
             // Remove old requests outside the window
-            spawn_session_cleanup_task();
             rate_info.requests.retain(|&request_time| now.duration_since(request_time) < RATE_LIMIT_WINDOW);
             
             // Check if we're under the limit

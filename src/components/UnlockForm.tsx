@@ -5,9 +5,11 @@ import { PasswordEntry } from '../types';
 
 interface UnlockFormProps {
   onUnlock: (entries: PasswordEntry[]) => void;
+  onSetupBrowserExtension?: () => void;
+  isSettingUpBrowserExtension?: boolean;
 }
 
-export function UnlockForm({ onUnlock }: UnlockFormProps) {
+export function UnlockForm({ onUnlock, onSetupBrowserExtension, isSettingUpBrowserExtension = false }: UnlockFormProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [needsTotp, setNeedsTotp] = useState(false);
@@ -177,6 +179,18 @@ export function UnlockForm({ onUnlock }: UnlockFormProps) {
                 : (isUnlocking ? 'Unlocking...' : 'Unlock Vault')}
             </button>
           </div>
+          {onSetupBrowserExtension && (
+            <div className="controls flex justify-center">
+              <button
+                type="button"
+                className="btn btn-secondary px-8 py-3"
+                onClick={onSetupBrowserExtension}
+                disabled={isSettingUpBrowserExtension}
+              >
+                {isSettingUpBrowserExtension ? 'Setting Up Browser Extension...' : 'Setup Browser Extension'}
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>
