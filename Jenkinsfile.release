@@ -17,6 +17,23 @@ pipeline {
       }
     }
 
+    stage('Version Guard') {
+      steps {
+        sh '''#!/usr/bin/env bash
+set -euo pipefail
+
+echo "Git commit: $(git rev-parse --short HEAD)"
+echo "Tauri lockfile entry:"
+grep -nA1 'name = "tauri"' src-tauri/Cargo.lock | head -2
+
+if ! grep -nA1 'name = "tauri"' src-tauri/Cargo.lock | grep -q 'version = "2.11.3"'; then
+  echo "ERROR: expected tauri 2.11.3 in Cargo.lock"
+  exit 1
+fi
+'''
+      }
+    }
+
     stage('Release Guard (v* tags only)') {
       steps {
         script {
