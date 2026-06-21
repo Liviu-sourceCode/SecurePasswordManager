@@ -288,7 +288,10 @@ fn validate_url(url: &str) -> Result<(), VaultError> {
     
     if !has_valid_scheme {
         // Allow domain-only URLs (e.g., "example.com")
-        let domain_regex = regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,})(/.*)?$").unwrap();
+        let domain_regex = match regex::Regex::new(r"^[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.([a-zA-Z]{2,}|[a-zA-Z]{2,}\.[a-zA-Z]{2,})(/.*)?$") {
+            Ok(re) => re,
+            Err(_) => return Err(VaultError::ValidationError("Invalid URL format".to_string())),
+        };
         if !domain_regex.is_match(url) {
             return Err(VaultError::ValidationError(
                 "Invalid URL format. Use http://, https://, ftp://, or domain.com format".to_string()
@@ -334,7 +337,10 @@ fn sanitize_input(input: &str) -> String {
         .replace('\u{2060}', ""); // Remove word joiner
     
     // Remove HTML/XML tags for XSS prevention
-    sanitized = regex::Regex::new(r"<[^>]*>").unwrap().replace_all(&sanitized, "").to_string();
+    sanitized = match regex::Regex::new(r"<[^>]*>") {
+        Ok(re) => re.replace_all(&sanitized, "").to_string(),
+        Err(_) => sanitized,
+    };
     
     // Remove SQL injection patterns (basic protection)
     let sql_patterns = [
@@ -658,8 +664,9 @@ fn check_disk_space(path: &PathBuf) -> Result<(), VaultError> {
                 }
             }
             Err(_) => {
-                // If we can't check disk space, proceed but log warning
-                eprintln!("Warning: Could not check available disk space");
+                // If we can't check disk space, proceed without exposing filesystem details
+                #[cfg(debug_assertions)]
+                eprintln!("Warning: disk space check unavailable");
             }
         }
     }
@@ -847,10 +854,11 @@ fn check_session_timeout(app_handle: &AppHandle, vault: &mut VaultState) -> Resu
     if !vault.is_locked {
         let elapsed = vault.last_activity.elapsed();
         let timeout_duration = Duration::from_secs(vault.session_timeout_minutes * 60);
-        
+
         if elapsed > timeout_duration {
             vault.is_locked = true;
-            eprintln!("[DEBUG] Session timeout: Vault automatically locked after {} minutes", vault.session_timeout_minutes);
+            #[cfg(debug_assertions)]
+            eprintln!("[DEBUG] Session timeout: Vault automatically locked");
             let _ = app_handle.emit("vault_auto_locked", serde_json::json!({ "reason": "session_timeout" }));
             return Err(PasswordManagerError::SessionTimeout);
         }
@@ -1001,54 +1009,42 @@ async fn vault_exists(app_handle: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 async fn create_vault(password: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<Vec<PasswordEntry>, String> {
-    eprintln!("[DEBUG] Starting create_vault");
     // Always validate master password for new vault creation
     validate_master_password(&password).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Password validated");
     
     // Get the vault path (creates directory if needed)
     let vault_path = get_vault_path(&app_handle).map_err(|e| sanitize_error(&e.to_string()))?;
     let path_str = vault_path.to_string_lossy().to_string();
     let _ = write_audit_log(&app_handle, "vault_create_path", &format!("Target path: {}", path_str));
-    eprintln!("[DEBUG] Vault path: {:?}", vault_path);
     
     // Safety guard: never overwrite an existing vault
     if vault_path.exists() {
         let _ = write_audit_log(&app_handle, "vault_create_error", &format!("Vault already exists at {}", path_str));
-        eprintln!("[DEBUG] Vault already exists, aborting");
         return Err("Vault already exists. Please unlock your vault.".to_string());
     }
-    eprintln!("[DEBUG] Vault does not exist, proceeding");
     
     // Generate 32 bytes of salt for enhanced security
     let mut salt_bytes = [0u8; 32];
     OsRng.fill_bytes(&mut salt_bytes);
-    eprintln!("[DEBUG] Salt generated");
     
     // Derive master key using Argon2id
     let master_key = derive_master_key(&password, &salt_bytes).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Master key derived");
     
     // Derive encryption key and verifier using HKDF
     let (encryption_key, verifier) = derive_keys(&master_key, &salt_bytes).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Encryption key and verifier derived");
     
     // Store master key securely
     *lock_master_key(&app_state).map_err(|e| e.to_string())? = Some(master_key);
-    eprintln!("[DEBUG] Master key stored in state");
 
     let initial_entries: Vec<PasswordEntry> = Vec::new();
     let payload = VaultPayload { entries: initial_entries.clone(), totp_account: None };
     let vault_data = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Vault payload serialized");
     
     // Generate AAD (Additional Authenticated Data)
     let aad = format!("vault_v{}_created_{}", VAULT_VERSION, chrono::Utc::now().timestamp());
     let aad_bytes = aad.as_bytes();
-    eprintln!("[DEBUG] AAD generated");
     
     let (encrypted_data, nonce) = encrypt_with_aad(&vault_data, &encryption_key, aad_bytes).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Vault data encrypted");
 
     let encrypted_vault = EncryptedVault {
         version: VAULT_VERSION,
@@ -1062,63 +1058,40 @@ async fn create_vault(password: String, app_state: State<'_, AppState>, app_hand
     
     let json = serde_json::to_string(&encrypted_vault).map_err(|e| e.to_string())?;
     fs::write(&vault_path, json).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Vault created successfully at {:?}", vault_path);
     
     let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     vault.entries = initial_entries;
     vault.totp_account = None;
     update_activity(&mut vault);
     vault.is_locked = false;
-    eprintln!("[DEBUG] Vault unlocked and state updated");
     
     // Log vault creation (audit trail)
-    if let Err(err) = write_audit_log(&app_handle, "vault_create", "Vault created") {
-        eprintln!("AUDIT WRITE ERROR: {}", err);
-    }
-    eprintln!("[DEBUG] Audit log written");
+    let _ = write_audit_log(&app_handle, "vault_create", "Vault created");
     
     Ok(Vec::new())
 }
 
 #[tauri::command]
 async fn unlock_vault(password: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<Vec<PasswordEntry>, String> {
-    eprintln!("=== UNLOCK_VAULT START ===");
-    let start_time = std::time::Instant::now();
-    
     let vault_path = get_vault_path(&app_handle).map_err(|e| sanitize_error(&e.to_string()))?;
-    eprintln!("UNLOCK: Got vault path in {:?}", start_time.elapsed());
     
     // For unlocking, the vault file must exist
     if !vault_path.exists() {
-        eprintln!("UNLOCK: Vault file does not exist");
         return Err("Vault not found. Please create a vault first.".to_string());
     }
-    eprintln!("UNLOCK: Vault file exists, proceeding to read in {:?}", start_time.elapsed());
 
     // Early MFA enforcement to avoid expensive key derivation
     let mfa_time = lock_mfa_time(&app_state).map_err(|e| e.to_string())?.clone();
     let is_recent = mfa_time
-        .map(|t| {
-            let elapsed = t.elapsed();
-            eprintln!("UNLOCK: Early MFA elapsed time: {:?}", elapsed);
-            elapsed < std::time::Duration::from_secs(300)
-        })
+        .map(|t| t.elapsed() < std::time::Duration::from_secs(300))
         .unwrap_or(false);
     let totp_secret_path = get_totp_secret_path(&app_handle).map_err(|e| e.to_string())?;
-    eprintln!(
-        "UNLOCK: Early MFA check - secret exists: {}, recent: {}",
-        totp_secret_path.exists(),
-        is_recent
-    );
     if totp_secret_path.exists() && !is_recent {
-        if let Err(err) = write_audit_log(
+        let _ = write_audit_log(
             &app_handle,
             "mfa_required_reject",
             "Unlock rejected before key derivation: recent TOTP verification required",
-        ) {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
-        }
-        eprintln!("UNLOCK: Early MFA gate blocked unlock");
+        );
         return Err("TOTP required: please verify code before unlocking".into());
     }
 
@@ -1154,7 +1127,6 @@ async fn unlock_vault(password: String, app_state: State<'_, AppState>, app_hand
                 }
             }
         };
-        eprintln!("UNLOCK: File read completed in {:?}", start_time.elapsed());
         
         let encrypted_vault: EncryptedVault = match serde_json::from_str(&contents) {
             Ok(vault) => vault,
@@ -1176,23 +1148,17 @@ async fn unlock_vault(password: String, app_state: State<'_, AppState>, app_hand
         
         let salt = BASE64.decode(encrypted_vault.salt).map_err(|e| e.to_string())?;
         let stored_verifier = BASE64.decode(encrypted_vault.verifier).map_err(|e| e.to_string())?;
-        eprintln!("UNLOCK: JSON parsed and decoded in {:?}", start_time.elapsed());
         
         // Derive master key using vault-stored Argon2 parameters and verify password
-        eprintln!("UNLOCK: Starting Argon2 key derivation...");
         let master_key = derive_master_key_with_params(&password, &salt, &encrypted_vault.argon2_params)
             .map_err(|e| e.to_string())?;
-        eprintln!("UNLOCK: Argon2 key derivation completed in {:?}", start_time.elapsed());
         
         if !verify_master_key(&master_key, &salt, &stored_verifier).map_err(|e| e.to_string())? {
-            eprintln!("UNLOCK: Password verification failed");
             return Err("Invalid password".to_string());
         }
-        eprintln!("UNLOCK: Password verified in {:?}", start_time.elapsed());
         
         // Derive encryption key
         let (encryption_key, _) = derive_keys(&master_key, &salt).map_err(|e| e.to_string())?;
-        eprintln!("UNLOCK: Encryption key derived in {:?}", start_time.elapsed());
         
         let encrypted_data = BASE64.decode(encrypted_vault.data).map_err(|e| e.to_string())?;
         let nonce = BASE64.decode(encrypted_vault.nonce).map_err(|e| e.to_string())?;
@@ -1200,7 +1166,6 @@ async fn unlock_vault(password: String, app_state: State<'_, AppState>, app_hand
         
         let decrypted_data = decrypt_with_aad(&encrypted_data, &encryption_key, &nonce, &aad)
             .map_err(|_| "Failed to decrypt vault data")?;
-        eprintln!("UNLOCK: Data decrypted in {:?}", start_time.elapsed());
         
         let payload: VaultPayload = match serde_json::from_slice::<VaultPayload>(&decrypted_data) {
             Ok(p) => p,
@@ -1215,18 +1180,13 @@ async fn unlock_vault(password: String, app_state: State<'_, AppState>, app_hand
         *lock_master_key(&app_state).map_err(|e| e.to_string())? = Some(master_key);
         
         // Log successful unlock (audit trail)
-        if let Err(err) = write_audit_log(&app_handle, "vault_unlock", "Vault unlocked") {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
-        }
+        let _ = write_audit_log(&app_handle, "vault_unlock", "Vault unlocked");
         
         let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
         vault.entries = payload.entries.clone();
         vault.totp_account = payload.totp_account.clone();
         update_activity(&mut vault);
         vault.is_locked = false;
-        
-        eprintln!("UNLOCK: Vault unlocked successfully with {} entries in {:?}", payload.entries.len(), start_time.elapsed());
-        eprintln!("=== UNLOCK_VAULT END ===");
         
         Ok(payload.entries)
 }
@@ -1238,7 +1198,6 @@ async fn add_entry(
     app_state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<Vec<PasswordEntry>, String> {
-    eprintln!("[DEBUG] Attempting to add entry");
     let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     
     // Check session timeout
@@ -1253,7 +1212,6 @@ async fn add_entry(
     update_activity(&mut vault);
     
     if vault.is_locked {
-        eprintln!("[DEBUG] Add entry failed: Vault is locked.");
         return Err("Vault is locked".to_string());
     }
 
@@ -1284,10 +1242,12 @@ async fn add_entry(
         new_entry.notes = Some(sanitize_input(notes));
     }
     validate_password_entry(&new_entry).map_err(|e| e.to_string())?;
-    eprintln!("[DEBUG] Entry validated: {}", new_entry.service);
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] Entry validated");
 
     vault.entries.push(new_entry.clone());
     update_activity(&mut vault);
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Entry added to in-memory vault. Attempting to save.");
 
     let updated_entries = vault.entries.clone();
@@ -1298,13 +1258,16 @@ async fn add_entry(
     let save_result = save_vault(&entries_for_saving, &totp_account, &app_state, &app_handle);
     match save_result {
         Ok(_) => {
+            #[cfg(debug_assertions)]
             eprintln!("[DEBUG] Vault saved successfully after adding entry.");
             if let Err(err) = write_audit_log(&app_handle, "add_entry", "Password entry added") {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             }
             Ok(updated_entries)
         }
         Err(e) => {
+            #[cfg(debug_assertions)]
             eprintln!("[DEBUG] Save vault failed after adding entry: {:?}", e);
             Err(format!("Save failed: {}", e))
         }
@@ -1382,7 +1345,8 @@ async fn update_entry(
                 changes.join("; ")
             );
             if let Err(err) = write_audit_log(&app_handle, "entry_update", &summary) {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             }
         } else {
             let summary = format!(
@@ -1390,7 +1354,8 @@ async fn update_entry(
                 entry.id
             );
             if let Err(err) = write_audit_log(&app_handle, "entry_update", &summary) {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             }
         }
         
@@ -1424,7 +1389,8 @@ async fn delete_entry(id: String, app_state: State<'_, AppState>, app_handle: Ap
         vault.entries.remove(index);
         save_vault(&vault.entries, &vault.totp_account, &app_state, &app_handle).map_err(|e| e.to_string())?;
         if let Err(err) = write_audit_log(&app_handle, "entry_delete", &format!("Entry deleted (id={}, service={})", removed.id, removed.service)) {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
+            #[cfg(debug_assertions)]
+            eprintln!("AUDIT WRITE ERROR: {:?}", err);
         }
         Ok(vault.entries.clone())
     } else {
@@ -1440,7 +1406,7 @@ async fn lock_vault(app_state: State<'_, AppState>, app_handle: AppHandle) -> Re
     
     // Explicit zeroization before removing key from state
     {
-        let mut master_key_guard = app_state.master_key.lock().unwrap();
+        let mut master_key_guard = lock_master_key(&app_state).map_err(|e| e.to_string())?;
         if let Some(key) = master_key_guard.take() {
             // SecureKey zeroizes on drop; dropping clears key material
             drop(key);
@@ -1449,7 +1415,8 @@ async fn lock_vault(app_state: State<'_, AppState>, app_handle: AppHandle) -> Re
     
     // Log vault lock (audit trail)
     if let Err(err) = write_audit_log(&app_handle, "vault_lock", "Vault locked") {
-        eprintln!("AUDIT WRITE ERROR: {}", err);
+        #[cfg(debug_assertions)]
+        eprintln!("AUDIT WRITE ERROR: {:?}", err);
     }
     Ok(())
 }
@@ -1463,11 +1430,11 @@ async fn enable_smart_clipboard(id: String, app_state: State<'_, AppState>, clip
     let password: String;
     
     {
-        let vault = app_state.vault.lock().unwrap();
+        let vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
         if vault.is_locked {
             return Err("Vault is locked".to_string());
         }
-        
+
         if let Some(entry) = vault.entries.iter().find(|e| e.id == id) {
             username = entry.username.clone();
             password = entry.password.clone();
@@ -1482,7 +1449,8 @@ async fn enable_smart_clipboard(id: String, app_state: State<'_, AppState>, clip
     
     // Audit log
     if let Err(err) = write_audit_log(&app_handle, "smart_clipboard_enabled", &format!("Smart clipboard enabled - username copied for entry '{}'", id)) {
-        eprintln!("AUDIT WRITE ERROR: {}", err);
+        #[cfg(debug_assertions)]
+        eprintln!("AUDIT WRITE ERROR: {:?}", err);
     }
     
     // Store credentials for later use
@@ -1564,21 +1532,22 @@ async fn monitor_clipboard_changes(clipboard_manager: Arc<SmartClipboardManager>
 
 #[tauri::command]
 async fn copy_username(id: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<String, String> {
-    let vault = app_state.vault.lock().unwrap();
+    let vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
-    
+
     if let Some(entry) = vault.entries.iter().find(|e| e.id == id) {
         // Copy username to clipboard
         let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {}", e))?;
         clipboard.set_text(&entry.username).map_err(|e| format!("Failed to copy username: {}", e))?;
         
         // Audit log
-        if let Err(err) = write_audit_log(&app_handle, "copy_username", &format!("Username copied for service '{}' (entry_id={})", 
-                 entry.service, entry.id)) {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
-        }
+          if let Err(err) = write_audit_log(&app_handle, "copy_username", &format!("Username copied for service '{}' (entry_id={})", 
+              entry.service, entry.id)) {
+             #[cfg(debug_assertions)]
+             eprintln!("AUDIT WRITE ERROR: {:?}", err);
+            }
         
         Ok(format!("Username copied for {}", entry.service))
     } else {
@@ -1588,11 +1557,11 @@ async fn copy_username(id: String, app_state: State<'_, AppState>, app_handle: A
 
 #[tauri::command]
 async fn copy_password(id: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<String, String> {
-    let vault = app_state.vault.lock().unwrap();
+    let vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
-    
+
     if let Some(entry) = vault.entries.iter().find(|e| e.id == id) {
         // Copy password to clipboard
         let mut clipboard = Clipboard::new().map_err(|e| format!("Clipboard error: {}", e))?;
@@ -1601,7 +1570,8 @@ async fn copy_password(id: String, app_state: State<'_, AppState>, app_handle: A
         // Audit log (don't log the actual password)
         if let Err(err) = write_audit_log(&app_handle, "copy_password", &format!("Password copied for service '{}' (entry_id={})", 
                  entry.service, entry.id)) {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
+            #[cfg(debug_assertions)]
+            eprintln!("AUDIT WRITE ERROR: {:?}", err);
         }
         
         Ok(format!("Password copied for {}", entry.service))
@@ -1618,7 +1588,8 @@ async fn check_clipboard_interference(clipboard_manager: State<'_, SmartClipboar
     let interference_detected = state.interference_detected;
     if interference_detected {
         if let Err(err) = write_audit_log(&app_handle, "clipboard_interference_detected", "Clipboard interference detected during smart mode") {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
+            #[cfg(debug_assertions)]
+            eprintln!("AUDIT WRITE ERROR: {:?}", err);
         }
         // Reset the flag after reporting
         state.interference_detected = false;
@@ -1632,12 +1603,12 @@ async fn delete_vault(app_state: State<'_, AppState>, app_handle: AppHandle) -> 
 
     // Lock the vault first and explicitly zeroize keys
     {
-        let mut vault = app_state.vault.lock().unwrap();
+        let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
         vault.is_locked = true;
         vault.entries.clear();
 
         // Explicit zeroization before removing key from state
-        let mut master_key_guard = app_state.master_key.lock().unwrap();
+        let mut master_key_guard = lock_master_key(&app_state).map_err(|e| e.to_string())?;
         if let Some(key) = master_key_guard.take() {
             // SecureKey zeroizes on drop; dropping clears key material
             drop(key);
@@ -1646,7 +1617,8 @@ async fn delete_vault(app_state: State<'_, AppState>, app_handle: AppHandle) -> 
 
     // Log vault deletion (audit trail)
     if let Err(err) = write_audit_log(&app_handle, "vault_delete", "Vault deleted") {
-        eprintln!("AUDIT WRITE ERROR: {}", err);
+        #[cfg(debug_assertions)]
+        eprintln!("AUDIT WRITE ERROR: {:?}", err);
     }
 
     // Delete the vault file if it exists, with retries
@@ -1763,11 +1735,11 @@ async fn import_vault_file(src_path: String, app_state: State<'_, AppState>, app
 
     // Reset in-memory state and zeroize master key before replacing vault file
     {
-        let mut vault = app_state.vault.lock().unwrap();
+        let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
         vault.is_locked = true;
         vault.entries.clear();
         vault.totp_account = None;
-        let mut master_key_guard = app_state.master_key.lock().unwrap();
+        let mut master_key_guard = lock_master_key(&app_state).map_err(|e| e.to_string())?;
         if let Some(key) = master_key_guard.take() {
             drop(key);
         }
@@ -1805,7 +1777,7 @@ async fn set_totp_account(
     app_state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<(), String> {
-    let mut vault = app_state.vault.lock().unwrap();
+    let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
@@ -1826,7 +1798,8 @@ async fn set_totp_account(
         .map_err(|e| e.to_string())?;
 
     if let Err(err) = write_audit_log(&app_handle, "set_totp_account", "TOTP account details updated") {
-        eprintln!("AUDIT WRITE ERROR: {}", err);
+        #[cfg(debug_assertions)]
+        eprintln!("AUDIT WRITE ERROR: {:?}", err);
     }
 
     Ok(())
@@ -1845,7 +1818,7 @@ async fn init_totp(app_state: State<'_, AppState>, _app_handle: AppHandle) -> Re
     let secret_bytes = secret.to_bytes().map_err(|e| e.to_string())?;
 
     // Read issuer/account from vault (fallbacks if missing)
-    let mut vault = app_state.vault.lock().unwrap();
+    let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
@@ -1867,7 +1840,7 @@ async fn init_totp(app_state: State<'_, AppState>, _app_handle: AppHandle) -> Re
 #[tauri::command]
 async fn finalize_totp(secret: String, app_state: State<'_, AppState>, app_handle: AppHandle) -> Result<(), String> {
     // Update last activity to keep session alive
-    let mut vault = app_state.vault.lock().unwrap();
+    let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
@@ -1878,7 +1851,9 @@ async fn finalize_totp(secret: String, app_state: State<'_, AppState>, app_handl
     // Protect secret bytes with platform-secure storage and save to file
     let secret_path = get_totp_secret_path(&app_handle).map_err(|e| e.to_string())?;
     if let Err(err) = check_disk_space(&secret_path) {
-        eprintln!("Warning: disk space check failed for TOTP secret: {}", err);
+        #[cfg(debug_assertions)]
+        eprintln!("Warning: disk space check failed for TOTP secret");
+        let _ = err;
     }
     let protected = dpapi_protect(&secret_bytes).map_err(|e| e.to_string())?;
     let mut file = OpenOptions::new()
@@ -1887,6 +1862,11 @@ async fn finalize_totp(secret: String, app_state: State<'_, AppState>, app_handl
         .truncate(true)
         .open(&secret_path)
         .map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
     file.write_all(&protected).map_err(|e| e.to_string())?;
 
     let _ = write_audit_log(&app_handle, "mfa_provision", "TOTP secret provisioned and stored with platform-secure storage");
@@ -1910,7 +1890,7 @@ async fn verify_totp(code: String, secret: Option<String>, app_state: State<'_, 
     };
 
     // Use issuer/account from vault for consistency, but allow TOTP verification even when locked
-    let mut vault = app_state.vault.lock().unwrap();
+    let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     // Don't check if vault is locked - TOTP verification should work when vault is locked!
     if !vault.is_locked {
         vault.last_activity = Instant::now();
@@ -1934,18 +1914,20 @@ async fn verify_totp(code: String, secret: Option<String>, app_state: State<'_, 
     ).map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let ok = totp.check(&code, now);
 
     if ok {
-        let mut mfa = app_state.mfa_verified_at.lock().unwrap();
+        let mut mfa = lock_mfa_time(&app_state).map_err(|e| e.to_string())?;
         let now = Instant::now();
         *mfa = Some(now);
-        eprintln!("MFA verification successful, timestamp set to: {:?}", now);
+        #[cfg(debug_assertions)]
+        eprintln!("MFA verification successful");
         let _ = write_audit_log(&app_handle, "mfa_verify", "TOTP verification succeeded");
     } else {
-        eprintln!("MFA verification failed for code: {}", code);
+        #[cfg(debug_assertions)]
+        eprintln!("MFA verification failed");
         let _ = write_audit_log(&app_handle, "mfa_verify", "TOTP verification failed");
     }
     Ok(ok)
@@ -1958,7 +1940,7 @@ async fn totp_account_status(app_handle: AppHandle) -> Result<bool, String> {
 
 #[tauri::command]
 async fn keep_session_alive(app_state: State<'_, AppState>) -> Result<(), String> {
-    let mut vault = app_state.vault.lock().unwrap();
+    let mut vault = lock_vault_state(&app_state).map_err(|e| e.to_string())?;
     if vault.is_locked {
         return Err("Vault is locked".to_string());
     }
@@ -1973,7 +1955,8 @@ async fn trigger_password_autotype(clipboard_manager: State<'_, SmartClipboardMa
         // Prevent auto-type if interference was detected
         if state.interference_detected {
             if let Err(err) = write_audit_log(&app_handle, "autotype_skipped_interference", "Auto-type skipped due to clipboard interference") {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             }
             return Err("Clipboard interference detected. Auto-type aborted.".to_string());
         }
@@ -1981,17 +1964,22 @@ async fn trigger_password_autotype(clipboard_manager: State<'_, SmartClipboardMa
         // Type the password
         let password_to_type = state.password.clone();
         if let Err(err) = write_audit_log(&app_handle, "autotype_triggered", "Auto-typing password") {
-            eprintln!("AUDIT WRITE ERROR: {}", err);
+            #[cfg(debug_assertions)]
+            eprintln!("AUDIT WRITE ERROR: {:?}", err);
         }
         
         // Use enigo to type the password
         tokio::task::spawn_blocking(move || {
-            let mut enigo = Enigo::new(&Settings::default()).unwrap();
+            let mut enigo = Enigo::new(&Settings::default())
+                .map_err(|_| "Failed to initialize input automation".to_string())?;
             // Press Tab to move to the password field
-            enigo.key(EnigoKey::Tab, enigo::Direction::Click).unwrap();
+            enigo.key(EnigoKey::Tab, enigo::Direction::Click)
+                .map_err(|_| "Failed to press Tab".to_string())?;
             // Type the password
-            enigo.text(&password_to_type).unwrap();
-        }).await.map_err(|e| e.to_string())?;
+            enigo.text(&password_to_type)
+                .map_err(|_| "Failed to type password".to_string())?;
+            Ok::<(), String>(())
+        }).await.map_err(|e| e.to_string())??;
 
         // Deactivate smart clipboard after auto-typing
         state.is_active = false;
@@ -2026,7 +2014,14 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
 
     // Create a Tokio runtime for the key listener thread
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(err) => {
+                #[cfg(debug_assertions)]
+                eprintln!("Failed to initialize runtime for global key monitor: {}", err);
+                return;
+            }
+        };
 
         let callback = move |event: Event| {
             let key_state = key_state_clone.clone();
@@ -2038,21 +2033,25 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                     EventType::KeyPress(RdevKey::ControlLeft) | EventType::KeyPress(RdevKey::ControlRight) => {
                         let mut state = key_state.write().await;
                         state.ctrl_pressed = true;
+                        #[cfg(debug_assertions)]
                         eprintln!("[DEBUG] Ctrl key pressed");
                     }
                     EventType::KeyRelease(RdevKey::ControlLeft) | EventType::KeyRelease(RdevKey::ControlRight) => {
                         let mut state = key_state.write().await;
                         state.ctrl_pressed = false;
+                        #[cfg(debug_assertions)]
                         eprintln!("[DEBUG] Ctrl key released");
                     }
                     EventType::KeyPress(RdevKey::KeyV) => {
                         let key_state_read = key_state.read().await;
                         if key_state_read.ctrl_pressed {
+                            #[cfg(debug_assertions)]
                             eprintln!("[DEBUG] Global Ctrl+V detected!");
 
                             // Check if smart clipboard is active
                             let clipboard_state = clipboard_manager.read().await;
                             if clipboard_state.is_active && !clipboard_state.password.is_empty() {
+                                #[cfg(debug_assertions)]
                                 eprintln!("[DEBUG] Smart clipboard active, triggering autotype sequence");
 
                                 // Clone the password for the autotype sequence
@@ -2065,10 +2064,19 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                                     tokio::time::sleep(Duration::from_millis(700)).await;
 
                                     // Press TAB to move to password field
+                                    #[cfg(debug_assertions)]
                                     eprintln!("[DEBUG] Pressing TAB key");
-                                    let mut enigo = Enigo::new(&Settings::default()).unwrap();
+                                    let mut enigo = match Enigo::new(&Settings::default()) {
+                                        Ok(enigo) => enigo,
+                                        Err(err) => {
+                                            #[cfg(debug_assertions)]
+                                            eprintln!("[DEBUG] Failed to initialize Enigo: {}", err);
+                                            return;
+                                        }
+                                    };
                                     for _ in 0..3 {
                                         if let Err(e) = enigo.key(EnigoKey::Tab, enigo::Direction::Click) {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("[DEBUG] Failed to press TAB: {}", e);
                                         } else {
                                             break;
@@ -2080,9 +2088,11 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                                     tokio::time::sleep(Duration::from_millis(300)).await;
 
                                     // Type the password
+                                    #[cfg(debug_assertions)]
                                     eprintln!("[DEBUG] Typing password");
                                     for _ in 0..3 {
                                         if let Err(e) = enigo.text(&password) {
+                                            #[cfg(debug_assertions)]
                                             eprintln!("[DEBUG] Failed to type password: {}", e);
                                         } else {
                                             break;
@@ -2090,6 +2100,7 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
                                         tokio::time::sleep(Duration::from_millis(100)).await;
                                     }
 
+                                    #[cfg(debug_assertions)]
                                     eprintln!("[DEBUG] Enhanced autotype completed");
                                 });
 
@@ -2108,6 +2119,7 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
 
         // Start listening for global key events
         if let Err(err) = listen(callback) {
+            #[cfg(debug_assertions)]
             eprintln!("[ERROR] Global key listener error: {:?}", err);
         }
     });
@@ -2115,22 +2127,27 @@ async fn monitor_global_keys(clipboard_state: Arc<RwLock<SmartClipboardState>>) 
 
 // Atomic save_vault function with temporary file and atomic rename
 fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app_state: &AppState, app_handle: &AppHandle) -> Result<(), VaultError> {
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Saving vault...");
     let master_key = {
-        let guard = app_state.master_key.lock().unwrap();
+        let guard = app_state.master_key.lock().map_err(|_| VaultError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Mutex lock failed")))?;
         guard.clone().ok_or(VaultError::NotUnlocked)?
     };
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Master key retrieved.");
 
     let vault_path = get_vault_path(app_handle)?;
-    eprintln!("[DEBUG] Vault path: {:?}", vault_path);
+    #[cfg(debug_assertions)]
+    eprintln!("[DEBUG] Vault path resolved");
     
     // Check available disk space before proceeding
     check_disk_space(&vault_path)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Disk space checked.");
     
     // Create backup before modifying vault
     create_backup(&vault_path)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Backup created.");
 
     // Read existing vault metadata. If it doesn't exist or is corrupt, we can't proceed.
@@ -2152,11 +2169,13 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
 
     // Derive encryption key
     let (encryption_key, _) = derive_keys(&master_key, &salt_bytes)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Encryption key derived.");
 
     let payload = VaultPayload { entries: entries.to_vec(), totp_account: totp_account.clone() };
     let vault_data = serde_json::to_vec(&payload)?;
     let (encrypted_data, nonce) = encrypt_with_aad(&vault_data, &encryption_key, &aad)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Vault data encrypted.");
 
     let encrypted_vault = EncryptedVault {
@@ -2170,6 +2189,7 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
     };
 
     let json = serde_json::to_string(&encrypted_vault)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Encrypted vault serialized to JSON.");
     
     // Atomic file operation: write to temporary file first
@@ -2178,22 +2198,33 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
     // Write to temporary file
     {
         let mut temp_file = File::create(&temp_path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = temp_file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
         
         // Lock the temporary file to prevent concurrent access
         temp_file.lock_exclusive().map_err(|_| VaultError::FileLocked)?;
+        #[cfg(debug_assertions)]
         eprintln!("[DEBUG] Temporary file locked.");
         
         temp_file.write_all(json.as_bytes())?;
         temp_file.sync_all()?; // Ensure data is written to disk
+        #[cfg(debug_assertions)]
         eprintln!("[DEBUG] Data written to temporary file.");
         
         // Unlock before closing
         temp_file.unlock().map_err(|_| VaultError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "Failed to unlock file")))?;
+        #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         eprintln!("[DEBUG] Temporary file unlocked.");
     }
     
     // Atomic rename - this is atomic on most filesystems
     fs::rename(&temp_path, &vault_path)?;
+    #[cfg(debug_assertions)]
     eprintln!("[DEBUG] Vault saved successfully.");
 
     Ok(())
@@ -2204,24 +2235,38 @@ fn save_vault(entries: &[PasswordEntry], totp_account: &Option<TotpAccount>, app
 async fn check_auto_lock(handle: tauri::AppHandle) {
     loop {
         sleep(Duration::from_secs(30)).await; // Check every 30 seconds
-        let app_state = handle.state::<AppState>();
-        let mut vault = app_state.vault.lock().unwrap();
-        if !vault.is_locked && vault.last_activity.elapsed() > INACTIVITY_TIMEOUT {
-            vault.is_locked = true;
-            vault.entries.clear();
-            
-            // Explicit zeroization before removing key from state
-            let mut master_key_guard = app_state.master_key.lock().unwrap();
-            if let Some(key) = master_key_guard.take() {
-                // SecureKey zeroizes on drop; dropping clears key material
-                drop(key);
+        
+        // Check if vault needs auto-lock
+        let should_zeroize = {
+            let app_state = handle.state::<AppState>();
+            let mut should_lock = false;
+            if let Ok(mut vault) = lock_vault_state(&app_state) {
+                if !vault.is_locked && vault.last_activity.elapsed() > INACTIVITY_TIMEOUT {
+                    vault.is_locked = true;
+                    vault.entries.clear();
+                    should_lock = true;
+                }
             }
-            
+            should_lock
+        }; // Drop vault lock and app_state here
+        
+        // If vault was locked, zeroize the master key
+        if should_zeroize {
+            let app_state = handle.state::<AppState>();
+            if let Ok(mut master_key_guard) = app_state.master_key.lock() {
+                if let Some(key) = master_key_guard.take() {
+                    // SecureKey zeroizes on drop; dropping clears key material
+                    drop(key);
+                }
+            }
+            drop(app_state);
+
             // Log auto-lock (audit trail)
             if let Err(err) = write_audit_log(&handle, "auto_lock", "Vault auto-locked due to inactivity") {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             }
-            
+
             // Emit auto-lock event for frontend
             let _ = handle.emit("vault_auto_locked", serde_json::json!({ "reason": "inactivity" }));
         }
@@ -2246,9 +2291,17 @@ pub fn run() {
     let is_native_messaging = explicit_native_mode || inferred_native_mode;
     
     if is_native_messaging {
+        #[cfg(debug_assertions)]
         eprintln!("Starting in native messaging mode");
         // Run in native messaging mode
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt,
+            Err(err) => {
+                #[cfg(debug_assertions)]
+                eprintln!("Failed to initialize runtime for native messaging: {}", err);
+                return;
+            }
+        };
         rt.block_on(async {
             // Create a minimal app handle for native messaging
             let app_state = AppState {
@@ -2265,19 +2318,27 @@ pub fn run() {
             };
             
             // Create a temporary Tauri app for native messaging
-            let app = tauri::Builder::default()
+            let app = match tauri::Builder::default()
                 .manage(app_state)
-                .build(tauri::generate_context!())
-                .expect("Failed to build Tauri app for native messaging");
+                .build(tauri::generate_context!()) {
+                Ok(app) => app,
+                Err(err) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Failed to build Tauri app for native messaging: {}", err);
+                    return;
+                }
+            };
             
             let handle = app.handle();
             if let Err(e) = native_messaging::run_native_messaging_host(handle.clone()).await {
+                #[cfg(debug_assertions)]
                 eprintln!("Native messaging host error: {}", e);
             }
         });
         return;
     }
     
+    #[cfg(debug_assertions)]
     eprintln!("Starting in GUI mode");
     // Memory locking is handled where appropriate
     
@@ -2304,7 +2365,7 @@ pub fn run() {
         })),
     };
 
-    tauri::Builder::default()
+    if let Err(err) = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -2337,7 +2398,8 @@ pub fn run() {
             let handle = app.handle();
             // Initialize session log file.log (truncate each session)
             if let Err(err) = init_audit_log(&handle) {
-                eprintln!("AUDIT WRITE ERROR: {}", err);
+                #[cfg(debug_assertions)]
+                eprintln!("AUDIT WRITE ERROR: {:?}", err);
             } else {
                 let _ = write_audit_log(&handle, "app_start", "Password Manager application started");
                 let _ = write_audit_log(&handle, "actions_available", "vault_exists, create_vault, unlock_vault, add_entry, update_entry, delete_entry, copy_username, copy_password, lock_vault, delete_vault, enable_smart_clipboard, trigger_password_autotype, check_clipboard_interference, init_totp, finalize_totp, verify_totp, set_totp_account, totp_account_status, keep_session_alive, export_vault_file, import_vault_file");
@@ -2355,8 +2417,10 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!()) {
+        #[cfg(debug_assertions)]
+        eprintln!("Failed to run Tauri application: {}", err);
+    }
 }
 
 #[derive(Serialize)]
@@ -2800,23 +2864,20 @@ pub mod native_messaging {
     // Validate extension ID against allowed list
     fn is_extension_authorized(extension_id: &str) -> bool {
         // Whitelist of authorized extension IDs (plain IDs without protocol)
-        #[allow(dead_code)]
         const AUTHORIZED_EXTENSIONS: &[&str] = &[
             // Add your actual extension IDs here
+            // Example:
             // "abcdefghijklmnopqrstuvwxyz123456",
-            // "12345678-1234-1234-1234-123456789abc",
         ];
         
-        // For development, allow any extension with proper format
-        // Extension ID should be 32 characters long for Chrome extensions
-        let has_valid_format = extension_id.len() == 32 && 
-                              extension_id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        // Check against whitelist first
+        if AUTHORIZED_EXTENSIONS.contains(&extension_id) {
+            return true;
+        }
         
-        // Production check (uncomment for production use):
-        // AUTHORIZED_EXTENSIONS.contains(&extension_id)
-        
-        // Development check:
-        has_valid_format
+        // If no extensions are configured in whitelist, reject all
+        // This prevents unauthorized extensions from connecting
+        false
     }
     
     // Validate origin domain with enhanced security
@@ -3081,7 +3142,8 @@ pub mod native_messaging {
                     *mk = Some(master_key);
                 }
                 if let Err(err) = write_audit_log(app_handle, "vault_unlock", "Vault unlocked via device key") {
-                    eprintln!("AUDIT WRITE ERROR: {}", err);
+                    #[cfg(debug_assertions)]
+                    eprintln!("AUDIT WRITE ERROR: {:?}", err);
                 }
                 if let Ok(mut state) = lock_vault_state(&app_state) {
                     state.entries = payload.entries.clone();
@@ -3106,7 +3168,18 @@ pub mod native_messaging {
                     if let Some(entry) = state.entries.iter().find(|e| e.id == credential_id) {
                         // Encrypt password using session AES-GCM key
                         if let Some(session) = find_session_by_token(&session_token) {
-                                let cipher = Aes256Gcm::new_from_slice(&session.encryption_key).unwrap();
+                                let cipher = match Aes256Gcm::new_from_slice(&session.encryption_key) {
+                                    Ok(cipher) => cipher,
+                                    Err(_) => {
+                                        return ExtensionResponse::PasswordResult {
+                                            success: false,
+                                            password: None,
+                                            encrypted_password: None,
+                                            nonce: None,
+                                            error: Some("Encryption failed".to_string()),
+                                        };
+                                    }
+                                };
                                 let mut nonce_bytes = [0u8; 12];
                                 OsRng.fill_bytes(&mut nonce_bytes);
                                 let nonce = Nonce::from_slice(&nonce_bytes);
@@ -3178,7 +3251,12 @@ pub mod native_messaging {
                 if current_mk.is_none() {
                     return ExtensionResponse::UnlockResult { success: false, error: Some("Vault is locked; cannot enable device unlock".to_string()) };
                 }
-                let key = current_mk.unwrap();
+                let key = match current_mk {
+                    Some(key) => key,
+                    None => {
+                        return ExtensionResponse::UnlockResult { success: false, error: Some("Vault is locked; cannot enable device unlock".to_string()) };
+                    }
+                };
                 let protected = match dpapi_protect(key.expose()) {
                     Ok(p) => p,
                     Err(_) => return ExtensionResponse::UnlockResult { success: false, error: Some("Failed to protect device key".to_string()) },
@@ -3193,7 +3271,8 @@ pub mod native_messaging {
                 match fs::write(&device_key_path, protected) {
                     Ok(_) => {
                         if let Err(err) = write_audit_log(app_handle, "device_unlock_enabled", "Stored platform-secure master key") {
-                            eprintln!("AUDIT WRITE ERROR: {}", err);
+                            #[cfg(debug_assertions)]
+                            eprintln!("AUDIT WRITE ERROR: {:?}", err);
                         }
                         ExtensionResponse::UnlockResult { success: true, error: None }
                     }
@@ -3235,29 +3314,19 @@ pub mod native_messaging {
             }
             
             ExtensionMessage::SearchCredentialsWithPassword { domain, url: _, master_password } => {
-                eprintln!("=== SearchCredentialsWithPassword START ===");
-                eprintln!("Domain: {}", domain);
-                eprintln!("Master password length: {}", master_password.len());
-                
-                // First, try to unlock the vault with the provided password
-                // As requested for reduced interaction in browser extension flows,
-                // bypass MFA by marking it as recently verified before unlocking.
-                // This only affects native messaging path and does not change desktop UI behavior.
-                {
-                    let _ = lock_mfa_time(&app_handle.state()).map(|mut mfa| {
-                        *mfa = Some(std::time::Instant::now());
-                    });
-                }
-                eprintln!("Attempting to unlock vault...");
+                // Unlock vault with provided password - requires explicit authentication
+                // Does NOT bypass MFA requirements
                 match unlock_vault(master_password, app_handle.state(), app_handle.clone()).await {
                     Ok(_) => {
+                        #[cfg(debug_assertions)]
                         eprintln!("Vault unlocked successfully");
                         // Vault unlocked successfully, now search for credentials
-                        eprintln!("Searching for credentials for domain: {}", domain);
+                        #[cfg(debug_assertions)]
+                        eprintln!("Searching for credentials");
                         match search_credentials_by_domain(&domain, app_handle) {
                             Ok(credentials) => {
-                                eprintln!("Credential search completed successfully. Found {} credentials", credentials.len());
-                                eprintln!("=== SearchCredentialsWithPassword SUCCESS ===");
+                                #[cfg(debug_assertions)]
+                                eprintln!("Credential search completed successfully");
                                 ExtensionResponse::CredentialsResult {
                                     success: true,
                                     credentials: Some(credentials),
@@ -3265,8 +3334,8 @@ pub mod native_messaging {
                                 }
                             },
                             Err(e) => {
+                                #[cfg(debug_assertions)]
                                 eprintln!("Credential search failed: {}", e);
-                                eprintln!("=== SearchCredentialsWithPassword SEARCH_ERROR ===");
                                 ExtensionResponse::CredentialsResult {
                                     success: false,
                                     credentials: None,

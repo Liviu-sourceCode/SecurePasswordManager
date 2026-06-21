@@ -85,7 +85,8 @@ fi
 
 export PATH="$HOME/.cargo/bin:$PATH"
 source "$HOME/.cargo/env" 2>/dev/null || true
-rustup default stable
+rustup toolchain install 1.96.0
+rustup default 1.96.0
 rustup component add rustfmt clippy
 '''
       }

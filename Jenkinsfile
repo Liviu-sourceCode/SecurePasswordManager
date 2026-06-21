@@ -98,21 +98,14 @@ echo "Linux dependency preflight passed."
         sh '''#!/usr/bin/env bash
 set -euo pipefail
 
-if command -v rustup >/dev/null 2>&1; then
-  rustup default stable
-  rustup component add rustfmt clippy || true
-  exit 0
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "Rustup not found. Installing Rust via rustup..."
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 fi
 
-if command -v rustc >/dev/null 2>&1; then
-  echo "rustc detected but rustup is unavailable; using system Rust toolchain."
-  exit 0
-fi
-
-echo "Rust toolchain not found. Installing Rust via rustup..."
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
-rustup default stable
+rustup toolchain install 1.96.0
+rustup default 1.96.0
 rustup component add rustfmt clippy || true
 '''
       }
